@@ -224,6 +224,12 @@
             </div>
         </div>
 
+        <div id="melee-prompt" class="fixed top-[52%] left-1/2 -translate-x-1/2 pointer-events-none z-20 text-center hidden">
+            <div class="px-5 py-1.5 rounded-full bg-orange-600/90 border-2 border-amber-300 text-white font-orbitron text-xs sm:text-sm font-black tracking-widest uppercase shadow-[0_0_20px_rgba(249,115,22,0.85)] animate-pulse-fast">
+                🥊 [E] FINALIZAÇÃO B.S.A.A.!
+            </div>
+        </div>
+
         <div id="center-alert" class="fixed top-[58%] left-1/2 -translate-x-1/2 pointer-events-none z-10 text-center hidden">
             <div id="center-alert-text" class="px-4 py-1 rounded-full bg-amber-500/20 border border-amber-400/60 text-amber-300 text-xs sm:text-sm font-bold tracking-widest uppercase animate-pulse-fast">
                 RECARREGANDO...
@@ -314,6 +320,9 @@
             </div>
             <div class="flex flex-col gap-2.5 items-end">
                 <div class="flex gap-2">
+                    <button id="mobile-melee-btn" class="interactive touch-zone px-3 h-12 rounded-full bg-orange-600/80 border-2 border-amber-300 text-white font-bold text-[11px] flex items-center justify-center active:scale-90">
+                        🥊 GOLPE
+                    </button>
                     <button id="mobile-weapon-btn" class="interactive touch-zone px-3 h-12 rounded-full hud-panel border border-amber-400/60 text-amber-300 font-bold text-[11px] flex items-center justify-center active:scale-90">
                         ARMA
                     </button>
@@ -351,7 +360,7 @@
                 </div>
                 <div class="flex justify-between items-center mt-2 pt-1.5 border-t border-amber-900/50 text-[10px]">
                     <span class="text-amber-400 font-bold">💣 Granadas [G]: <strong id="grenades-hud" class="font-orbitron text-white">3</strong></span>
-                    <span class="text-cyan-300 font-bold">🤖 Torretas: <strong id="turrets-hud" class="font-orbitron text-white">0/3</strong></span>
+                    <span class="text-red-400 font-bold">🥊 Golpe [E]</span>
                     <span class="text-orange-300 font-bold">💨 Dash [Q]</span>
                 </div>
             </div>
@@ -488,10 +497,10 @@
 
             <div class="text-left bg-black/75 rounded-xl p-3.5 mb-5 border border-amber-900/50 grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px] text-amber-200/90">
                 <div>🔫 <strong class="text-amber-400">Teclas 1 a 4:</strong> Pistola, Fuzil, Escopeta e Sniper</div>
-                <div>🎯 <strong class="text-orange-400">Botão Direito:</strong> Mira Laser Tática Zoom (ADS)</div>
-                <div>💣 <strong class="text-amber-400">Tecla G / Q:</strong> Granada Incendiária / Dash</div>
+                <div>🥊 <strong class="text-orange-400">Tecla E (Melee RE5):</strong> Golpe Físico / Finalização em Atordoados</div>
+                <div>💣 <strong class="text-amber-400">Tecla G / Q:</strong> Granada Incendiária / Dash (WASD)</div>
                 <div>🤖 <strong class="text-cyan-400">Torretas (Loja B):</strong> Sentinelas Defensivas B.S.A.A.</div>
-                <div>☠️ <strong class="text-red-400">Chefão Némesis:</strong> Aparece a cada 3 Capítulos!</div>
+                <div>☠️ <strong class="text-red-400">Chefão Némesis:</strong> Investida Brutal + Drops Raros!</div>
                 <div>🤝 <strong class="text-emerald-400">Reviver Co-op:</strong> Aproxime-se do aliado caído</div>
             </div>
 
@@ -621,6 +630,22 @@
                 gain.connect(this.ctx.destination);
                 osc.start(now);
                 osc.stop(now + 0.06);
+            }
+
+            playMelee() {
+                if (!this.enabled || !this.ctx) return;
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(220, now);
+                osc.frequency.exponentialRampToValueAtTime(48, now + 0.16);
+                gain.gain.setValueAtTime(0.45, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.16);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now);
+                osc.stop(now + 0.16);
             }
 
             playPlayerDamage() {
@@ -941,7 +966,7 @@
 
         let scene, camera, renderer, clock;
         let gunGroup, weaponModels = [], muzzleFlash, muzzleLight, playerFlashlight, playerFlashlightTarget, flashlightBeam;
-        let obstacles = [], zombies = [], particles = [], bulletTracers = [], supplyCrates = [];
+        let obstacles = [], zombies = [], particles = [], bulletTracers = [], supplyCrates = [], dyingZombies = [], lootDrops = [];
         let explosiveBarrels = [], activeGrenades = [], activeTurrets = [], shellCasings = [], groundDecals = [], shockwaves = [];
         let ambientDust = null, procTextures = {}, gfxQuality = 'ULTRA';
 
@@ -973,6 +998,7 @@
             healOverlay: document.getElementById('heal-overlay'),
             centerAlert: document.getElementById('center-alert'),
             centerAlertText: document.getElementById('center-alert-text'),
+            meleePrompt: document.getElementById('melee-prompt'),
             waveBanner: document.getElementById('wave-banner'),
             waveBannerText: document.getElementById('wave-banner-text'),
             modal: document.getElementById('overlay-modal'),
@@ -1521,7 +1547,14 @@
             }));
             hpFill.position.set(0, 2.25 * s, 0.01); hpFill.userData = { isUI: true }; group.add(hpFill);
 
-            return { group, parts: { torso, head, leftLeg, rightLeg, leftArm, rightArm, hpBg, hpFill }, materials: [skinMat, clothesMat] };
+            const staggerRing = new THREE.Mesh(new THREE.RingGeometry(0.35 * s, 0.48 * s, 16), new THREE.MeshBasicMaterial({ color: 0xfacc15, side: THREE.DoubleSide }));
+            staggerRing.rotation.x = -Math.PI / 2;
+            staggerRing.position.set(0, 2.08 * s, 0);
+            staggerRing.visible = false;
+            staggerRing.userData = { isUI: true };
+            group.add(staggerRing);
+
+            return { group, parts: { torso, head, leftLeg, rightLeg, leftArm, rightArm, hpBg, hpFill, staggerRing }, materials: [skinMat, clothesMat] };
         }
 
         function spawnZombie(forcedData = null) {
@@ -1568,6 +1601,7 @@
                 speed: baseType.speed * (0.95 + Math.random() * 0.12) * Math.min(1.45, 1 + (state.wave - 1) * 0.04),
                 damage: baseType.damage, scoreValue: baseType.score, scale: baseType.scale,
                 attackCooldown: 0, animOffset: Math.random() * 100, flashTimer: 0,
+                staggerTimer: 0, staggerType: null,
                 chargeCooldown: 4.5 + Math.random() * 2.5, chargeState: 'IDLE', chargeTimer: 0, chargeDirX: 0, chargeDirZ: 0
             };
 
@@ -1786,9 +1820,11 @@
                     if (barrelRef) {
                         triggerBarrelExplosion(barrelRef, false);
                     } else if (zombieRef) {
-                        const isHead = hit.object.userData.isHead === true;
-                        const totalDmg = Math.round(wep.damage * dmgMult * (isHead ? wep.headshotMult : 1));
-                        damageZombie(zombieRef, totalDmg, hit.point, isHead, false);
+                        const hitZone = hit.object.userData.hitZone || (hit.object.userData.isHead ? 'HEAD' : 'BODY');
+                        const isHead = hitZone === 'HEAD';
+                        const zoneMult = isHead ? wep.headshotMult : (hitZone === 'LEG' ? 0.85 : 1);
+                        const totalDmg = Math.round(wep.damage * dmgMult * zoneMult);
+                        damageZombie(zombieRef, totalDmg, hit.point, isHead, false, hitZone);
                     } else {
                         spawnImpactParticles(hit.point, 0xfbbf24, 4);
                     }
@@ -1804,11 +1840,11 @@
             if (!wep.auto) mouse.isDown = false;
         }
 
-        function damageZombie(zombie, amount, hitPoint, isHeadshot, fromNetwork = false) {
+        function damageZombie(zombie, amount, hitPoint, isHeadshot, fromNetwork = false, hitZone = null, isMelee = false) {
             sound.playHit(isHeadshot);
             dom.hitmarker.style.opacity = '1';
             setTimeout(() => { dom.hitmarker.style.opacity = '0'; }, 90);
-            spawnDamagePopup(hitPoint, amount, isHeadshot);
+            spawnDamagePopup(hitPoint, amount, isHeadshot || isMelee);
             spawnImpactParticles(hitPoint, isHeadshot ? 0xdc2626 : 0x92400e, isHeadshot ? 12 : 6);
 
             zombie.materials.forEach(mat => mat.emissive.setHex(0x7f1d1d));
@@ -1831,12 +1867,107 @@
                 zombie.mesh.position.x = knockX; zombie.mesh.position.z = knockZ;
             }
 
-            if (zombie.hp <= 0) killZombie(zombie, isHeadshot);
+            const resolvedZone = hitZone || (isHeadshot ? 'HEAD' : 'BODY');
+            if (zombie.hp > 0 && zombie.staggerTimer <= 0 && (resolvedZone === 'HEAD' || resolvedZone === 'LEG')) {
+                zombie.staggerTimer = 2.8;
+                zombie.staggerType = resolvedZone === 'HEAD' ? 'HEAD' : 'KNEE';
+                if (zombie.parts && zombie.parts.staggerRing) zombie.parts.staggerRing.visible = true;
+            }
+
+            if (zombie.hp <= 0) killZombie(zombie, isHeadshot, isMelee);
         }
 
-        function killZombie(zombie, isHeadshot) {
-            const centerPos = zombie.mesh.position.clone().add(new THREE.Vector3(0, 1.1, 0));
-            spawnGroundDecal(zombie.mesh.position.x, zombie.mesh.position.z, zombie.type === 'ACID' ? 0x14532d : 0x451a03, zombie.type === 'BOSS' ? 2.2 : 0.95);
+        function performMeleeAttack() {
+            if (state.status !== 'PLAYING' || state.isDowned) return false;
+
+            let staggeredTarget = null, minStaggerDist = 3.8;
+            for (let i = 0; i < zombies.length; i++) {
+                const z = zombies[i];
+                if (z.staggerTimer > 0) {
+                    const d = Math.hypot(z.mesh.position.x - camera.position.x, z.mesh.position.z - camera.position.z);
+                    if (d <= minStaggerDist) { minStaggerDist = d; staggeredTarget = z; }
+                }
+            }
+
+            if (staggeredTarget) {
+                sound.playMelee();
+                state.invulnTimer = 0.6;
+                state.screenShake = 0.22;
+                const center = staggeredTarget.mesh.position.clone();
+                spawnShockwaveRing(center.x, center.z, 0xf59e0b, 3.8);
+                spawnImpactParticles(center.clone().add(new THREE.Vector3(0, 1.2, 0)), 0xf59e0b, 18);
+                showCenterAlert('🥊 GOLPE MARCIAL B.S.A.A.!', 1100);
+
+                staggeredTarget.staggerTimer = 0;
+                if (staggeredTarget.parts && staggeredTarget.parts.staggerRing) staggeredTarget.parts.staggerRing.visible = false;
+
+                const nearby = zombies.slice();
+                for (let i = 0; i < nearby.length; i++) {
+                    const z = nearby[i];
+                    if (z === staggeredTarget) continue;
+                    const d = Math.hypot(z.mesh.position.x - center.x, z.mesh.position.z - center.z);
+                    if (d <= 3.8) {
+                        const push = new THREE.Vector3(z.mesh.position.x - camera.position.x, 0, z.mesh.position.z - camera.position.z).normalize();
+                        const stepped = steerEntityMove(z.mesh.position.x, z.mesh.position.z, push.x, push.z, 2.6, 0.45 * z.scale);
+                        z.mesh.position.x = stepped.x; z.mesh.position.z = stepped.z;
+                        damageZombie(z, 95, z.mesh.position.clone().add(new THREE.Vector3(0, 1.1, 0)), false, false, 'BODY', true);
+                    }
+                }
+
+                const pushPrimary = new THREE.Vector3(center.x - camera.position.x, 0, center.z - camera.position.z).normalize();
+                const steppedPrimary = steerEntityMove(center.x, center.z, pushPrimary.x, pushPrimary.z, 2.6, 0.45 * staggeredTarget.scale);
+                staggeredTarget.mesh.position.x = steppedPrimary.x; staggeredTarget.mesh.position.z = steppedPrimary.z;
+                damageZombie(staggeredTarget, 180, center.clone().add(new THREE.Vector3(0, 1.2, 0)), false, false, 'BODY', true);
+                return true;
+            }
+
+            if (state.meleeCooldown > 0) return false;
+            state.meleeCooldown = 1.8;
+            sound.playMelee();
+            state.screenShake = 0.08;
+
+            const snapshot = zombies.slice();
+            for (let i = 0; i < snapshot.length; i++) {
+                const z = snapshot[i];
+                const d = Math.hypot(z.mesh.position.x - camera.position.x, z.mesh.position.z - camera.position.z);
+                if (d <= 2.6) {
+                    const push = new THREE.Vector3(z.mesh.position.x - camera.position.x, 0, z.mesh.position.z - camera.position.z).normalize();
+                    const stepped = steerEntityMove(z.mesh.position.x, z.mesh.position.z, push.x, push.z, 1.6, 0.45 * z.scale);
+                    z.mesh.position.x = stepped.x; z.mesh.position.z = stepped.z;
+                    damageZombie(z, 35, z.mesh.position.clone().add(new THREE.Vector3(0, 1.1, 0)), false, false, 'BODY', false);
+                }
+            }
+            return true;
+        }
+
+        function spawnLootDrop(pos, guaranteed = false, isBoss = false, forcedType = null) {
+            if (!guaranteed && !isBoss && Math.random() > 0.48) return null;
+
+            let dropType = forcedType;
+            if (!dropType) {
+                const r = Math.random();
+                if (isBoss) dropType = 'GOLD';
+                else if (r < 0.45) dropType = 'GOLD';
+                else if (r < 0.80) dropType = 'AMMO';
+                else if (r < 0.92) dropType = 'HERB';
+                else dropType = 'COMBO';
+            }
+
+            const colors = { GOLD: 0xfacc15, AMMO: 0x38bdf8, HERB: 0x22c55e, COMBO: 0xf43f5e };
+            const mat = new THREE.MeshBasicMaterial({ color: colors[dropType] || 0xfacc15 });
+            const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.38, 0.38), mat);
+            mesh.position.set(pos.x, 0.45, pos.z);
+            scene.add(mesh);
+
+            const drop = { type: dropType, mesh, isBoss, baseY: 0.45, phase: Math.random() * Math.PI * 2 };
+            lootDrops.push(drop);
+            return drop;
+        }
+
+        function killZombie(zombie, isHeadshot, isMelee = false) {
+            const deathPos = zombie.mesh.position.clone();
+            const centerPos = deathPos.clone().add(new THREE.Vector3(0, 1.1, 0));
+            spawnGroundDecal(deathPos.x, deathPos.z, zombie.type === 'ACID' ? 0x14532d : 0x451a03, zombie.type === 'BOSS' ? 2.2 : 0.95);
 
             if (zombie.type === 'ACID') {
                 spawnImpactParticles(centerPos, 0xa3e635, 22);
@@ -1847,20 +1978,41 @@
                 spawnImpactParticles(centerPos, 0x991b1b, 16);
             }
 
-            scene.remove(zombie.mesh);
             const idx = zombies.indexOf(zombie);
             if (idx !== -1) zombies.splice(idx, 1);
 
+            if (zombie.parts) {
+                if (zombie.parts.hpBg) zombie.parts.hpBg.visible = false;
+                if (zombie.parts.hpFill) zombie.parts.hpFill.visible = false;
+                if (zombie.parts.staggerRing) zombie.parts.staggerRing.visible = false;
+                if ((isHeadshot || isMelee) && zombie.parts.head) {
+                    zombie.parts.head.visible = false;
+                    spawnImpactParticles(deathPos.clone().add(new THREE.Vector3(0, 1.8 * zombie.scale, 0)), 0xdc2626, 16);
+                }
+            }
+
+            const pushDir = new THREE.Vector3().subVectors(deathPos, camera.position).setY(0).normalize();
+            dyingZombies.push({
+                mesh: zombie.mesh,
+                velX: pushDir.x * (isMelee ? 4.5 : 2.2),
+                velZ: pushDir.z * (isMelee ? 4.5 : 2.2),
+                life: 1.1
+            });
+
+            spawnLootDrop(deathPos, zombie.type === 'BRUTE' || zombie.type === 'BOSS', zombie.type === 'BOSS');
+
             state.zombiesAlive = zombies.length;
             state.kills++;
-            state.combo = Math.min(8, state.combo + 1);
+            state.combo = Math.min(10, state.combo + 1);
             state.comboTimer = 4.5;
 
-            const basePoints = zombie.scoreValue + (isHeadshot ? 50 : 0);
+            const basePoints = zombie.scoreValue + (isHeadshot ? 50 : 0) + (isMelee ? 75 : 0);
             state.score += Math.round(basePoints * (1 + (state.combo - 1) * 0.15));
 
             if (zombie.type === 'BOSS') {
                 sound.playExplosion(); showCenterAlert('🏆 MAJINI NÉMESIS DERROTADO!', 2500);
+            } else if (isMelee) {
+                showCenterAlert(`🥊 EXECUÇÃO MARCIAL! COMBO ${state.combo}x`, 950);
             } else if (isHeadshot) {
                 showCenterAlert(`CRITICAL HEADSHOT! COMBO ${state.combo}x`, 900);
             }
@@ -2182,6 +2334,8 @@
                 if (state.spawnTimer <= 0) { spawnZombie(); state.spawnTimer = Math.max(0.42, 1.45 - state.wave * 0.08); }
             }
 
+            let showMeleeBanner = false;
+
             for (let i = 0; i < zombies.length; i++) {
                 const z = zombies[i];
                 if (z.flashTimer > 0) {
@@ -2202,6 +2356,29 @@
 
                 if (z.parts.hpBg && z.parts.hpFill) {
                     z.parts.hpBg.lookAt(camera.position); z.parts.hpFill.lookAt(camera.position);
+                }
+
+                if (z.staggerTimer > 0) {
+                    z.staggerTimer -= dt;
+                    if (z.parts.staggerRing) {
+                        z.parts.staggerRing.visible = true;
+                        z.parts.staggerRing.rotation.z += dt * 4.5;
+                    }
+                    if (z.staggerType === 'KNEE') {
+                        z.parts.torso.position.y = 0.85 * z.scale;
+                        z.parts.head.position.y = 1.52 * z.scale;
+                    } else {
+                        z.parts.torso.rotation.x = 0.35;
+                    }
+                    if (distLocal <= 3.8 && !state.isDowned) showMeleeBanner = true;
+                    if (z.staggerTimer <= 0) {
+                        z.staggerTimer = 0; z.staggerType = null;
+                        if (z.parts.staggerRing) z.parts.staggerRing.visible = false;
+                        z.parts.torso.position.y = 1.15 * z.scale;
+                        z.parts.head.position.y = 1.82 * z.scale;
+                        z.parts.torso.rotation.x = 0;
+                    }
+                    continue;
                 }
 
                 const zRadius = 0.45 * z.scale;
@@ -2268,9 +2445,66 @@
                 }
                 if (z.attackCooldown > 0) z.attackCooldown -= dt;
             }
+
+            if (dom.meleePrompt) {
+                dom.meleePrompt.classList.toggle('hidden', !showMeleeBanner);
+            }
         }
 
         function updateEffectsAndCrates(dt, elapsedTime) {
+            for (let i = dyingZombies.length - 1; i >= 0; i--) {
+                const dz = dyingZombies[i];
+                dz.life -= dt;
+                dz.mesh.position.x += dz.velX * dt;
+                dz.mesh.position.z += dz.velZ * dt;
+                dz.velX *= 0.9; dz.velZ *= 0.9;
+                dz.mesh.rotation.x = Math.max(-Math.PI / 2, dz.mesh.rotation.x - dt * 3.8);
+                if (dz.life < 0.35) dz.mesh.position.y -= dt * 1.8;
+                if (dz.life <= 0) {
+                    scene.remove(dz.mesh);
+                    dyingZombies.splice(i, 1);
+                }
+            }
+
+            for (let i = lootDrops.length - 1; i >= 0; i--) {
+                const drop = lootDrops[i];
+                drop.mesh.rotation.y += 2.2 * dt;
+                drop.mesh.position.y = drop.baseY + Math.sin(elapsedTime * 3.5 + drop.phase) * 0.14;
+                const dx = camera.position.x - drop.mesh.position.x;
+                const dz = camera.position.z - drop.mesh.position.z;
+                const dist = Math.hypot(dx, dz);
+                if (dist <= 3.6 && dist > 0.001) {
+                    const pullSpeed = 9.5 * dt;
+                    drop.mesh.position.x += (dx / dist) * Math.min(dist, pullSpeed);
+                    drop.mesh.position.z += (dz / dist) * Math.min(dist, pullSpeed);
+                }
+                const newDist = Math.hypot(camera.position.x - drop.mesh.position.x, camera.position.z - drop.mesh.position.z);
+                if (newDist <= 1.3) {
+                    sound.playPickup();
+                    if (drop.type === 'GOLD') {
+                        const bonus = drop.isBoss ? 500 : 120;
+                        state.score += bonus;
+                        showCenterAlert(`💰 +${bonus} TESOURO COLETADO!`, 1000);
+                    } else if (drop.type === 'AMMO') {
+                        state.weaponsState[1].reserve = Math.min(WEAPONS[1].reserveMax, state.weaponsState[1].reserve + 30);
+                        state.weaponsState[2].reserve = Math.min(WEAPONS[2].reserveMax, state.weaponsState[2].reserve + 6);
+                        state.weaponsState[3].reserve = Math.min(WEAPONS[3].reserveMax, state.weaponsState[3].reserve + 3);
+                        showCenterAlert('彈 +MUNIÇÃO TÁTICA!', 1000);
+                    } else if (drop.type === 'HERB') {
+                        state.health = Math.min(state.maxHealth, state.health + 25);
+                        dom.healOverlay.style.opacity = '1'; setTimeout(() => { dom.healOverlay.style.opacity = '0'; }, 300);
+                        showCenterAlert('🌿 +25 ERVA VERDE!', 1000);
+                    } else if (drop.type === 'COMBO') {
+                        state.combo = Math.min(10, state.combo + 2);
+                        state.comboTimer = 8.5;
+                        showCenterAlert(`🔥 BÔNUS MERCENARIES! COMBO ${state.combo}x`, 1200);
+                    }
+                    updateHUD();
+                    scene.remove(drop.mesh);
+                    lootDrops.splice(i, 1);
+                }
+            }
+
             for (let i = bulletTracers.length - 1; i >= 0; i--) {
                 const t = bulletTracers[i];
                 t.life -= dt; t.mat.opacity = Math.max(0, t.life * 14);
@@ -2515,6 +2749,8 @@
             }
 
             zombies.forEach(z => scene.remove(z.mesh)); zombies = [];
+            dyingZombies.forEach(dz => scene.remove(dz.mesh)); dyingZombies = [];
+            lootDrops.forEach(d => scene.remove(d.mesh)); lootDrops = [];
             supplyCrates.forEach(c => scene.remove(c.mesh)); supplyCrates = [];
             activeTurrets.forEach(t => scene.remove(t.mesh)); activeTurrets = [];
             activeGrenades.forEach(g => scene.remove(g.mesh)); activeGrenades = [];
@@ -2593,6 +2829,7 @@
                 if (code === 'Digit2') switchWeapon(1);
                 if (code === 'Digit3') switchWeapon(2);
                 if (code === 'Digit4') switchWeapon(3);
+                if (code === 'KeyE' && state.status === 'PLAYING') performMeleeAttack();
                 if (code === 'KeyG' && state.status === 'PLAYING') throwGrenade();
                 if (code === 'KeyQ' && state.status === 'PLAYING') performTacticalDash();
                 if (code === 'KeyR' && state.status === 'PLAYING') reloadWeapon();
@@ -2708,6 +2945,7 @@
             const btnReload = document.getElementById('mobile-reload-btn');
             const btnJump = document.getElementById('mobile-jump-btn');
             const btnWeapon = document.getElementById('mobile-weapon-btn');
+            const btnMelee = document.getElementById('mobile-melee-btn');
 
             joyZone.addEventListener('touchstart', (e) => { e.preventDefault(); mobileInput.active = true; updateJoystick(e.touches[0]); });
             joyZone.addEventListener('touchmove', (e) => { e.preventDefault(); if (mobileInput.active) updateJoystick(e.touches[0]); });
@@ -2749,6 +2987,7 @@
             btnShoot.addEventListener('touchend', (e) => { e.preventDefault(); mouse.isDown = false; });
             btnReload.addEventListener('touchstart', (e) => { e.preventDefault(); reloadWeapon(); });
             btnWeapon.addEventListener('touchstart', (e) => { e.preventDefault(); switchWeapon((state.currentWeaponIdx + 1) % WEAPONS.length); });
+            if (btnMelee) btnMelee.addEventListener('touchstart', (e) => { e.preventDefault(); performMeleeAttack(); });
             btnJump.addEventListener('touchstart', (e) => {
                 e.preventDefault();
                 if (state.isGrounded && !state.isDowned) { state.velocityY = CONFIG.jumpForce; state.isGrounded = false; }

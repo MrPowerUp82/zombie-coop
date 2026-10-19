@@ -249,12 +249,16 @@ export function createGameHarness() {
         get camera() { return camera; },
         get obstacles() { return obstacles; },
         get zombies() { return zombies; },
+        get dyingZombies() { return typeof dyingZombies !== 'undefined' ? dyingZombies : undefined; },
+        get lootDrops() { return typeof lootDrops !== 'undefined' ? lootDrops : undefined; },
         get supplyCrates() { return supplyCrates; },
         get explosiveBarrels() { return explosiveBarrels; },
         initThreeJS, startGame, pauseGame, triggerGameOver, toggleShopModal,
         updatePlayer, performTacticalDash, reloadWeapon, switchWeapon, fireWeapon,
         takePlayerDamage, spawnZombie, updateZombies, updateCoopBotAI,
         damageZombie, killZombie, updateEffectsAndCrates, checkObstacleCollision,
+        get performMeleeAttack() { return typeof performMeleeAttack !== 'undefined' ? performMeleeAttack : undefined; },
+        get spawnLootDrop() { return typeof spawnLootDrop !== 'undefined' ? spawnLootDrop : undefined; },
         animate
     };`;
 
@@ -423,4 +427,91 @@ test('Task 2.4: sheva_ai_facing_revive_and_mutual_downed - Sheva faces zombie, r
     game.net.ally.isDowned = true;
     game.updatePlayer(0.016);
     assert.equal(game.state.status, 'GAMEOVER', 'Mutual downed state must trigger GAMEOVER');
+});
+
+test('Task 3.1: head_and_leg_stagger - head and leg shots trigger stagger state and pause zombie movement/attacks', () => {
+    const { game, sandbox } = createGameHarness();
+    game.startGame();
+    game.zombies.length = 0;
+    sandbox.Math.random = () => 0.1; // Deterministic stagger roll
+
+    const zHead = game.spawnZombie({ uid: 301, type: 'WALKER', x: 0, z: -5, hp: 100 });
+    game.damageZombie(zHead, 25, zHead.mesh.position.clone(), true, false, 'HEAD');
+    assert.equal(zHead.staggerTimer, 2.8, 'Headshot should set staggerTimer to 2.8');
+    assert.equal(zHead.staggerType, 'HEAD', 'Headshot should set staggerType to HEAD');
+
+    const zLeg = game.spawnZombie({ uid: 302, type: 'WALKER', x: 3, z: -5, hp: 100 });
+    game.damageZombie(zLeg, 25, zLeg.mesh.position.clone(), false, false, 'LEG');
+    assert.equal(zLeg.staggerTimer, 2.8, 'Leg shot should set staggerTimer to 2.8');
+    assert.equal(zLeg.staggerType, 'KNEE', 'Leg shot should set staggerType to KNEE');
+
+    // Staggered zombie should not move or attack player
+    zHead.mesh.position.set(game.camera.position.x + 1.0, 0, game.camera.position.z);
+    const startX = zHead.mesh.position.x;
+    const startHp = game.state.health;
+    game.updateZombies(0.2, 1.0);
+    assert.equal(zHead.mesh.position.x, startX, 'Staggered zombie must not move');
+    assert.equal(game.state.health, startHp, 'Staggered zombie must not attack');
+});
+
+test('Task 3.2: melee_finisher_and_shove - performMeleeAttack executes RE5 finisher on staggered target and defensive shove otherwise', () => {
+    const { game } = createGameHarness();
+    game.startGame();
+    game.zombies.length = 0;
+    game.camera.position.set(0, game.CONFIG.playerHeight, 0);
+    game.state.yaw = 0;
+
+    // 1. Finisher on staggered zombie within 3.8m + AoE on nearby zombie
+    const zStaggered = game.spawnZombie({ uid: 303, type: 'WALKER', x: 0, z: -2.2, hp: 150 });
+    zStaggered.staggerTimer = 2.5;
+    zStaggered.staggerType = 'HEAD';
+
+    const zNearby = game.spawnZombie({ uid: 304, type: 'BRUTE', x: 1.5, z: -2.5, hp: 250 });
+    const scoreBefore = game.state.score;
+
+    assert.equal(typeof game.performMeleeAttack, 'function', 'performMeleeAttack must be defined');
+    const didMelee = game.performMeleeAttack();
+    assert.equal(didMelee, true);
+    assert.equal(game.state.invulnTimer, 0.6, 'Finisher must grant 0.6s invulnerability');
+    assert.ok(zStaggered.hp <= 0, 'Primary staggered target (150 HP) must die from 180 finisher damage');
+    assert.equal(zNearby.hp, 250 - 95, 'Nearby zombie within 3.8m must take 95 AoE damage');
+    assert.ok(game.state.score >= scoreBefore + zStaggered.scoreValue + 75, 'Melee finisher kill must award +75 bonus score');
+
+    // 2. Defensive shove when no staggered zombie is present
+    game.zombies.length = 0;
+    game.state.meleeCooldown = 0;
+    const zClose = game.spawnZombie({ uid: 305, type: 'WALKER', x: 0, z: -1.8, hp: 100 });
+    const zBeforeZ = zClose.mesh.position.z;
+    const didShove = game.performMeleeAttack();
+    assert.equal(didShove, true);
+    assert.equal(zClose.hp, 65, 'Defensive shove must deal 35 damage');
+    assert.ok(zClose.mesh.position.z < zBeforeZ - 0.5, 'Defensive shove must knock zombie backward');
+    assert.equal(game.state.meleeCooldown, 1.8, 'Defensive shove must set 1.8s cooldown');
+});
+
+test('Task 3.3: dying_zombies_and_magnetic_loot_drops - killed zombies enter dyingZombies and spawn magnetic loot drops up to 10x combo', () => {
+    const { game, sandbox } = createGameHarness();
+    game.startGame();
+    game.zombies.length = 0;
+    sandbox.Math.random = () => 0.1; // Guaranteed drop
+
+    const z = game.spawnZombie({ uid: 306, type: 'WALKER', x: 0, z: -2.5, hp: 50 });
+    game.camera.position.set(0, game.CONFIG.playerHeight, 0);
+
+    game.killZombie(z, true, false);
+    assert.ok(Array.isArray(game.dyingZombies) && game.dyingZombies.length === 1, 'Killed zombie must be added to dyingZombies');
+    assert.equal(z.parts.head.visible, false, 'Headshot kill must hide zombie head mesh');
+    assert.ok(Array.isArray(game.lootDrops) && game.lootDrops.length >= 1, 'Killed zombie must spawn a loot drop');
+
+    const drop = game.lootDrops[0];
+    drop.mesh.position.set(0, 0.5, -3.0); // Within 3.6m magnetic pull radius
+    game.updateEffectsAndCrates(0.1, 1.0);
+    assert.ok(drop.mesh.position.z > -3.0, 'Loot drop within 3.6m must be pulled magnetically toward player');
+
+    // Move drop within pickup radius (< 1.3m) and test COMBO boost up to 10x
+    drop.type = 'COMBO';
+    game.state.combo = 9;
+    drop.mesh.position.set(0, 0.5, -0.8);
+    game.updateEffectsAndCrates(0.1, 1.1);
+    assert.equal(game.state.combo, 10, 'COMBO drop must increase combo up to the new 10x cap');
 });
