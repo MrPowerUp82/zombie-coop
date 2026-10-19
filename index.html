@@ -708,6 +708,9 @@
             perks: { damageLvl: 1, speedLvl: 1, healthLvl: 1 },
             grenades: 3,
             dashCooldown: 0,
+            invulnTimer: 0,
+            reloadTimerId: null,
+            meleeCooldown: 0,
             combo: 1,
             comboTimer: 0,
             isAiming: false,
@@ -1436,9 +1439,17 @@
             net.ally.muzzleFlash = allyMuzzle;
         }
 
+        function cancelReload() {
+            if (state.reloadTimerId !== null) {
+                clearTimeout(state.reloadTimerId);
+                state.reloadTimerId = null;
+            }
+            state.isReloading = false;
+        }
+
         function switchWeapon(index) {
             if (index < 0 || index >= WEAPONS.length || index === state.currentWeaponIdx) return;
-            state.isReloading = false; setAiming(false); dom.centerAlert.classList.add('hidden');
+            cancelReload(); setAiming(false); dom.centerAlert.classList.add('hidden');
             state.currentWeaponIdx = index;
             weaponModels.forEach((m, i) => { m.visible = (i === index); });
             for (let i = 0; i < WEAPONS.length; i++) {
@@ -1647,9 +1658,20 @@
             if (state.status !== 'PLAYING' || state.isDowned) return;
             if (state.dashCooldown > 0 || state.stamina < 25) { showCenterAlert('FÔLEGO ESGOTADO!', 800); return; }
             state.stamina = Math.max(0, state.stamina - 25);
-            state.dashCooldown = 2.2; sound.playPing();
+            state.dashCooldown = 2.2;
+            state.invulnTimer = 0.35;
+            sound.playPing();
 
-            const dashDir = new THREE.Vector3(-Math.sin(state.yaw), 0, -Math.cos(state.yaw)).normalize();
+            let moveForward = (keys.w ? 1 : 0) - (keys.s ? 1 : 0);
+            let moveRight = (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
+            if (mobileInput.active) { moveForward = -mobileInput.moveY; moveRight = mobileInput.moveX; }
+
+            const forwardVec = new THREE.Vector3(-Math.sin(state.yaw), 0, -Math.cos(state.yaw));
+            const rightVec = new THREE.Vector3(Math.cos(state.yaw), 0, -Math.sin(state.yaw));
+            const dashDir = new THREE.Vector3().addScaledVector(forwardVec, moveForward).addScaledVector(rightVec, moveRight);
+            if (dashDir.lengthSq() < 0.01) dashDir.copy(forwardVec);
+            dashDir.normalize();
+
             for (let step = 0; step < 8; step++) {
                 const nx = camera.position.x + dashDir.x * 0.65;
                 const nz = camera.position.z + dashDir.z * 0.65;
@@ -1836,17 +1858,23 @@
         }
 
         function reloadWeapon() {
-            const wep = WEAPONS[state.currentWeaponIdx];
-            const wepState = state.weaponsState[state.currentWeaponIdx];
+            const wepIdx = state.currentWeaponIdx;
+            const wep = WEAPONS[wepIdx];
+            const wepState = state.weaponsState[wepIdx];
             if (state.isReloading || wepState.mag === wep.magSize || wepState.reserve <= 0) return;
 
+            cancelReload();
             state.isReloading = true;
             sound.playReload();
             const reloadDuration = wep.reloadTime / (1 + (state.perks.speedLvl - 1) * 0.15);
             showCenterAlert('RECARREGANDO ARMA...', reloadDuration * 1000);
 
-            setTimeout(() => {
-                if (state.status !== 'PLAYING' && state.status !== 'SHOP') { state.isReloading = false; return; }
+            state.reloadTimerId = setTimeout(() => {
+                state.reloadTimerId = null;
+                if ((state.status !== 'PLAYING' && state.status !== 'SHOP') || state.currentWeaponIdx !== wepIdx) {
+                    state.isReloading = false;
+                    return;
+                }
                 const needed = wep.magSize - wepState.mag;
                 const toLoad = wep.id === 'PISTOL' ? needed : Math.min(needed, wepState.reserve);
                 wepState.mag += toLoad;
@@ -1887,7 +1915,7 @@
         }
 
         function takePlayerDamage(amount) {
-            if (state.isDowned) return;
+            if (state.isDowned || state.invulnTimer > 0) return;
             state.health = Math.max(0, state.health - amount);
             sound.playPlayerDamage(); updateHUD();
             dom.damageOverlay.style.opacity = '1';
@@ -1896,6 +1924,10 @@
             if (state.health <= 0) {
                 if (net.connected && net.ally.active && !net.ally.isDowned) {
                     state.isDowned = true;
+                    if (state.status === 'SHOP') {
+                        state.status = 'PLAYING';
+                        dom.shopModal.classList.add('hidden');
+                    }
                     showCenterAlert('⚠️ VOCÊ FOI FERIDO! AGUARDE O PARCEIRO!', 4000);
                 } else {
                     triggerGameOver();
@@ -1906,7 +1938,6 @@
         function updatePlayer(dt) {
             let moveForward = (keys.w ? 1 : 0) - (keys.s ? 1 : 0);
             let moveRight = (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
-            if (keys.a) moveRight -= 1;
 
             if (mobileInput.active) { moveForward = -mobileInput.moveY; moveRight = mobileInput.moveX; }
 
@@ -1967,6 +1998,8 @@
             }
 
             if (state.dashCooldown > 0) state.dashCooldown = Math.max(0, state.dashCooldown - dt);
+            if (state.invulnTimer > 0) state.invulnTimer = Math.max(0, state.invulnTimer - dt);
+            if (state.meleeCooldown > 0) state.meleeCooldown = Math.max(0, state.meleeCooldown - dt);
             if (state.comboTimer > 0) {
                 state.comboTimer -= dt;
                 if (state.comboTimer <= 0 && state.combo > 1) { state.combo = 1; updateHUD(); }
@@ -2399,9 +2432,10 @@
 
             state.status = 'PLAYING'; state.score = 0; state.wave = 1; state.kills = 0; state.combo = 1; state.grenades = 3;
             state.maxHealth = CONFIG.maxHealth; state.health = CONFIG.maxHealth; state.stamina = CONFIG.maxStamina; state.isDowned = false;
+            state.invulnTimer = 0; state.meleeCooldown = 0;
             state.perks = { damageLvl: 1, speedLvl: 1, healthLvl: 1 };
             state.weaponsState = [{ mag: 15, reserve: 999 }, { mag: 30, reserve: 150 }, { mag: 8, reserve: 40 }, { mag: 5, reserve: 20 }];
-            state.isReloading = false; setAiming(false); state.yaw = 0; state.pitch = 0;
+            cancelReload(); setAiming(false); state.yaw = 0; state.pitch = 0;
             camera.position.set(net.mode === 'CLIENT' ? 2.5 : -2.5, CONFIG.playerHeight, 0);
 
             spawnExplosiveBarrels(); spawnSupplyCrate(); spawnSupplyCrate();
@@ -2421,8 +2455,10 @@
         }
 
         function triggerGameOver() {
+            cancelReload();
             state.status = 'GAMEOVER'; mouse.isDown = false;
             if (document.pointerLockElement) document.exitPointerLock();
+            dom.shopModal.classList.add('hidden');
             dom.modalTitle.innerHTML = 'VOCÊ FOI <span class="text-red-500">ELIMINADO!</span>';
             dom.modalSubtitle.textContent = 'A infecção Majini consumiu a zona industrial.';
             dom.finalScore.textContent = state.score; dom.finalWave.textContent = state.wave; dom.finalKills.textContent = state.kills;
@@ -2463,10 +2499,7 @@
                 if (code === 'KeyA' || code === 'ArrowLeft') keys.a = true;
                 if (code === 'KeyD' || code === 'ArrowRight') keys.d = true;
                 if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = true;
-                if (code === 'Space') {
-                    keys.space = true;
-                    if (state.status === 'PLAYING' && !document.pointerLockElement) fireWeapon();
-                }
+                if (code === 'Space') keys.space = true;
                 if (code === 'Digit1') switchWeapon(0);
                 if (code === 'Digit2') switchWeapon(1);
                 if (code === 'Digit3') switchWeapon(2);
@@ -2509,7 +2542,7 @@
                 if (document.pointerLockElement === renderer.domElement) {
                     state.yaw -= e.movementX * sensitivity;
                     state.pitch -= e.movementY * sensitivity;
-                } else {
+                } else if (mouse.isDown) {
                     if (mouse.prevX !== 0 || mouse.prevY !== 0) {
                         state.yaw -= (e.clientX - mouse.prevX) * sensitivity * 1.3;
                         state.pitch -= (e.clientY - mouse.prevY) * sensitivity * 1.3;
@@ -2521,8 +2554,10 @@
 
             renderer.domElement.addEventListener('mousedown', (e) => {
                 if (state.status !== 'PLAYING') return;
-                if (e.button === 0) { requestPointerLockSafely(); mouse.isDown = true; fireWeapon(); }
-                else if (e.button === 2) { setAiming(!state.isAiming); }
+                if (e.button === 0) {
+                    mouse.prevX = e.clientX; mouse.prevY = e.clientY;
+                    requestPointerLockSafely(); mouse.isDown = true; fireWeapon();
+                } else if (e.button === 2) { setAiming(!state.isAiming); }
             });
 
             window.addEventListener('mouseup', (e) => { if (e.button === 0) mouse.isDown = false; });
@@ -2624,7 +2659,7 @@
             btnShoot.addEventListener('touchstart', (e) => { e.preventDefault(); mouse.isDown = true; fireWeapon(); });
             btnShoot.addEventListener('touchend', (e) => { e.preventDefault(); mouse.isDown = false; });
             btnReload.addEventListener('touchstart', (e) => { e.preventDefault(); reloadWeapon(); });
-            btnWeapon.addEventListener('touchstart', (e) => { e.preventDefault(); switchWeapon((state.currentWeaponIdx + 1) % 3); });
+            btnWeapon.addEventListener('touchstart', (e) => { e.preventDefault(); switchWeapon((state.currentWeaponIdx + 1) % WEAPONS.length); });
             btnJump.addEventListener('touchstart', (e) => {
                 e.preventDefault();
                 if (state.isGrounded && !state.isDowned) { state.velocityY = CONFIG.jumpForce; state.isGrounded = false; }
@@ -2638,7 +2673,9 @@
 
             if (state.status === 'PLAYING' || state.status === 'SHOP') {
                 if (state.status === 'PLAYING') updatePlayer(dt);
-                updateZombies(dt, elapsedTime);
+                if (state.status === 'PLAYING' || (net.connected && !net.botActive)) {
+                    updateZombies(dt, elapsedTime);
+                }
                 updateEffectsAndCrates(dt, elapsedTime);
                 updateNetworkSync(elapsedTime, dt);
                 drawRadar();

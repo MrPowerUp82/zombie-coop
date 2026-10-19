@@ -1,0 +1,349 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import path from 'node:path';
+
+export function createGameHarness() {
+    const htmlPath = path.resolve(process.cwd(), 'index.html');
+    const html = fs.readFileSync(htmlPath, 'utf8');
+    const match = html.match(/<script>([\s\S]*?)<\/script>/);
+    if (!match) throw new Error('Could not find inline <script> in index.html');
+
+    const elements = new Map();
+    const makeEl = (id = '') => {
+        const classes = new Set(['hidden']);
+        const listeners = {};
+        return {
+            id,
+            value: '',
+            textContent: '',
+            innerHTML: '',
+            className: '',
+            width: 110,
+            height: 110,
+            style: { width: '', opacity: '', left: '', top: '', transform: '' },
+            classList: {
+                add: (...c) => c.forEach(x => classes.add(x)),
+                remove: (...c) => c.forEach(x => classes.delete(x)),
+                contains: (c) => classes.has(c),
+                toggle: (c, force) => {
+                    if (force === undefined) {
+                        if (classes.has(c)) classes.delete(c); else classes.add(c);
+                    } else if (force) classes.add(c); else classes.delete(c);
+                }
+            },
+            addEventListener: (ev, fn) => {
+                listeners[ev] = listeners[ev] || [];
+                listeners[ev].push(fn);
+            },
+            dispatchEvent: (ev, data) => {
+                (listeners[ev] || []).forEach(fn => fn(data));
+            },
+            appendChild: (child) => { child.parentNode = { removeChild: () => {} }; },
+            removeChild: () => {},
+            getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }),
+            getContext: () => ({
+                fillStyle: '', strokeStyle: '', lineWidth: 1,
+                fillRect: () => {}, strokeRect: () => {}, clearRect: () => {},
+                beginPath: () => {}, arc: () => {}, stroke: () => {}, fill: () => {}
+            }),
+            requestPointerLock: () => {},
+            select: () => {}
+        };
+    };
+
+    const getElementById = (id) => {
+        if (!elements.has(id)) elements.set(id, makeEl(id));
+        return elements.get(id);
+    };
+
+    class Vector3 {
+        constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
+        set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
+        setY(y) { this.y = y; return this; }
+        copy(v) { this.x = v.x; this.y = v.y; this.z = v.z; return this; }
+        clone() { return new Vector3(this.x, this.y, this.z); }
+        add(v) { this.x += v.x; this.y += v.y; this.z += v.z; return this; }
+        subVectors(a, b) { this.x = a.x - b.x; this.y = a.y - b.y; this.z = a.z - b.z; return this; }
+        addScaledVector(v, s) { this.x += v.x * s; this.y += v.y * s; this.z += v.z * s; return this; }
+        multiplyScalar(s) { this.x *= s; this.y *= s; this.z *= s; return this; }
+        lengthSq() { return this.x * this.x + this.y * this.y + this.z * this.z; }
+        length() { return Math.hypot(this.x, this.y, this.z); }
+        normalize() {
+            const len = this.length();
+            if (len > 0) this.multiplyScalar(1 / len);
+            return this;
+        }
+        dot(v) { return this.x * v.x + this.y * v.y + this.z * v.z; }
+        applyQuaternion() { return this; }
+        applyMatrix4() { return this; }
+        project() { return this; }
+    }
+
+    class Object3D {
+        constructor() {
+            this.position = new Vector3();
+            this.rotation = { x: 0, y: 0, z: 0, order: 'YXZ', set: function(x, y, z) { this.x = x; this.y = y; this.z = z; } };
+            this.scale = new Vector3(1, 1, 1);
+            this.quaternion = {};
+            this.matrixWorld = {};
+            this.children = [];
+            this.userData = {};
+            this.visible = true;
+        }
+        add(child) { if (child) this.children.push(child); }
+        remove(child) {
+            const idx = this.children.indexOf(child);
+            if (idx !== -1) this.children.splice(idx, 1);
+        }
+        lookAt() {}
+        traverse(cb) {
+            cb(this);
+            for (const c of this.children) {
+                if (c && typeof c.traverse === 'function') c.traverse(cb);
+            }
+        }
+    }
+
+    class Mesh extends Object3D {
+        constructor(geo = {}, mat = {}) {
+            super();
+            this.isMesh = true;
+            this.geometry = { dispose: () => {}, ...geo };
+            this.material = { dispose: () => {}, emissive: { setHex: () => {} }, ...mat };
+        }
+    }
+
+    class Material {
+        constructor(opts = {}) {
+            Object.assign(this, opts);
+            this.emissive = { setHex: (h) => { this.emissiveHex = h; } };
+        }
+        clone() { return new Material(this); }
+        dispose() {}
+    }
+
+    class Geometry {
+        translate() { return this; }
+        rotateX() { return this; }
+        setAttribute() { return this; }
+        setFromPoints() { return this; }
+        dispose() {}
+    }
+
+    const THREE = {
+        Vector3,
+        Vector2: class { constructor(x = 0, y = 0) { this.x = x; this.y = y; } },
+        Object3D,
+        Group: class extends Object3D {},
+        Scene: class extends Object3D {},
+        Mesh,
+        Points: class extends Object3D {},
+        Line: class extends Object3D {
+            constructor(geo, mat) { super(); this.geometry = geo || new Geometry(); this.material = mat || new Material(); }
+        },
+        Color: class {},
+        FogExp2: class {},
+        PerspectiveCamera: class extends Object3D {
+            constructor(fov = 74) { super(); this.fov = fov; }
+            updateProjectionMatrix() {}
+        },
+        WebGLRenderer: class {
+            constructor() {
+                this.domElement = makeEl('game-canvas');
+                this.shadowMap = {};
+            }
+            setSize() {}
+            setPixelRatio() {}
+            render() {}
+        },
+        Clock: class {
+            constructor() { this.elapsed = 10; }
+            getDelta() { return 0.016; }
+            getElapsedTime() { return this.elapsed; }
+        },
+        HemisphereLight: class extends Object3D {},
+        DirectionalLight: class extends Object3D {
+            constructor() { super(); this.shadow = { mapSize: {}, camera: {} }; }
+        },
+        PointLight: class extends Object3D {},
+        SpotLight: class extends Object3D {},
+        SphereGeometry: Geometry,
+        BoxGeometry: Geometry,
+        PlaneGeometry: Geometry,
+        CylinderGeometry: Geometry,
+        ConeGeometry: Geometry,
+        RingGeometry: Geometry,
+        CircleGeometry: Geometry,
+        TorusGeometry: Geometry,
+        BufferGeometry: Geometry,
+        BufferAttribute: class {},
+        MeshBasicMaterial: Material,
+        MeshStandardMaterial: Material,
+        PointsMaterial: Material,
+        LineBasicMaterial: Material,
+        GridHelper: class extends Object3D { constructor() { super(); this.material = {}; } },
+        CanvasTexture: class { constructor() { this.repeat = { set: () => {} }; } },
+        Raycaster: class {
+            constructor() { this.ray = { at: (dist, out) => out.set(0, 0, -dist) }; }
+            setFromCamera() {}
+            intersectObjects() { return []; }
+        },
+        MathUtils: {
+            clamp: (v, min, max) => Math.max(min, Math.min(max, v)),
+            lerp: (a, b, t) => a + (b - a) * t
+        },
+        RepeatWrapping: 1,
+        PCFSoftShadowMap: 1,
+        ACESFilmicToneMapping: 1,
+        sRGBEncoding: 1,
+        AdditiveBlending: 1,
+        DoubleSide: 1
+    };
+
+    const windowListeners = {};
+    const sandbox = {
+        THREE,
+        Math: Object.create(Math),
+        Date,
+        JSON,
+        Number,
+        Array,
+        Set,
+        Map,
+        Float32Array,
+        console,
+        setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); if (t && t.unref) t.unref(); return t; },
+        clearTimeout,
+        requestAnimationFrame: () => {},
+        localStorage: { getItem: () => null, setItem: () => {} },
+        BroadcastChannel: class { postMessage() {} close() {} },
+        window: {
+            innerWidth: 1280,
+            innerHeight: 720,
+            devicePixelRatio: 1,
+            addEventListener: (ev, fn) => {
+                windowListeners[ev] = windowListeners[ev] || [];
+                windowListeners[ev].push(fn);
+            },
+            dispatchEvent: (ev, data) => {
+                (windowListeners[ev] || []).forEach(fn => fn(data));
+            }
+        },
+        document: {
+            pointerLockElement: null,
+            activeElement: null,
+            body: { appendChild: () => {}, removeChild: () => {} },
+            createElement: () => makeEl(),
+            getElementById,
+            exitPointerLock: function() { this.pointerLockElement = null; },
+            execCommand: () => {}
+        }
+    };
+
+    const exportedVars = `
+    globalThis.__game = {
+        WEAPONS, CONFIG, state, net, keys, mouse, mobileInput, dom,
+        get scene() { return scene; },
+        get camera() { return camera; },
+        get obstacles() { return obstacles; },
+        get zombies() { return zombies; },
+        get supplyCrates() { return supplyCrates; },
+        get explosiveBarrels() { return explosiveBarrels; },
+        initThreeJS, startGame, pauseGame, triggerGameOver, toggleShopModal,
+        updatePlayer, performTacticalDash, reloadWeapon, switchWeapon, fireWeapon,
+        takePlayerDamage, spawnZombie, updateZombies, updateCoopBotAI,
+        damageZombie, killZombie, updateEffectsAndCrates, checkObstacleCollision,
+        animate
+    };`;
+
+    vm.runInNewContext(match[1] + '\n' + exportedVars, sandbox);
+    sandbox.__game.initThreeJS();
+    return { game: sandbox.__game, sandbox, windowListeners };
+}
+
+test('Task 1.1: strafe_symmetry - A and D move at equal speeds and A+D cancels out', () => {
+    const { game } = createGameHarness();
+    game.state.status = 'PLAYING';
+    game.state.yaw = 0;
+
+    // Move right (D)
+    game.camera.position.set(0, game.CONFIG.playerHeight, 0);
+    game.keys.d = true;
+    game.keys.a = false;
+    game.updatePlayer(0.1);
+    const rightDelta = game.camera.position.x;
+    assert.ok(rightDelta > 0, 'pressing D should move +X');
+
+    // Move left (A)
+    game.camera.position.set(0, game.CONFIG.playerHeight, 0);
+    game.keys.d = false;
+    game.keys.a = true;
+    game.updatePlayer(0.1);
+    const leftDelta = game.camera.position.x;
+    assert.ok(leftDelta < 0, 'pressing A should move -X');
+    assert.equal(Math.abs(leftDelta), Math.abs(rightDelta), 'A and D displacement must be symmetrical');
+
+    // Hold both A and D
+    game.camera.position.set(0, game.CONFIG.playerHeight, 0);
+    game.keys.d = true;
+    game.keys.a = true;
+    game.updatePlayer(0.1);
+    assert.equal(game.camera.position.x, 0, 'holding both A and D must produce zero horizontal movement');
+});
+
+test('Task 1.2: directional_dash_and_iframes - dash uses WASD direction and grants 0.35s invulnerability', () => {
+    const { game } = createGameHarness();
+    game.state.status = 'PLAYING';
+    game.state.yaw = 0;
+    game.camera.position.set(0, game.CONFIG.playerHeight, 0);
+
+    // Hold A (left) and dash
+    game.keys.a = true;
+    game.performTacticalDash();
+
+    assert.ok(game.camera.position.x < -1.0, `dash while holding A should move left (-X), got x=${game.camera.position.x}`);
+    assert.equal(game.state.invulnTimer, 0.35, 'dash should set state.invulnTimer to 0.35');
+
+    const hpBefore = game.state.health;
+    game.takePlayerDamage(30);
+    assert.equal(game.state.health, hpBefore, 'takePlayerDamage should be ignored while invulnTimer > 0');
+});
+
+test('Task 1.3: reload_cancel_on_switch - switching weapons mid-reload cancels the pending reload timer', async () => {
+    const { game } = createGameHarness();
+    game.state.status = 'PLAYING';
+    game.switchWeapon(1); // Rifle (magSize 30)
+    game.state.weaponsState[1].mag = 5;
+    game.state.perks.speedLvl = 50; // Fast reload for test (~180ms)
+
+    game.reloadWeapon();
+    assert.equal(game.state.isReloading, true);
+    assert.ok(game.state.reloadTimerId, 'reloadTimerId should be stored on state');
+
+    // Switch weapon before reload completes
+    game.switchWeapon(2);
+    assert.equal(game.state.isReloading, false);
+    assert.equal(game.state.reloadTimerId, null, 'switching weapon must clear reloadTimerId');
+
+    await new Promise(r => setTimeout(r, 260));
+    assert.equal(game.state.weaponsState[1].mag, 5, 'cancelled reload must not refill previous weapon magazine');
+});
+
+test('Task 1.4: shop_pauses_zombies_in_solo - zombies do not move or attack while shop is open in Solo/Bot mode', () => {
+    const { game } = createGameHarness();
+    game.startGame();
+    game.zombies.length = 0;
+    const z = game.spawnZombie({ uid: 99, type: 'WALKER', x: game.camera.position.x + 1.1, z: game.camera.position.z, hp: 70 });
+    const startX = z.mesh.position.x;
+    const startHp = game.state.health;
+
+    // Open shop in Solo mode
+    game.toggleShopModal();
+    assert.equal(game.state.status, 'SHOP');
+
+    game.animate();
+    assert.equal(z.mesh.position.x, startX, 'zombie should not move while shop is open in Solo mode');
+    assert.equal(game.state.health, startHp, 'player should not take damage while shop is open in Solo mode');
+});
