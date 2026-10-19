@@ -1490,32 +1490,36 @@
             const eyeMat = new THREE.MeshBasicMaterial({ color: typeConfig.eyeColor });
 
             const legGeo = new THREE.BoxGeometry(0.24 * s, 0.75 * s, 0.24 * s);
-            const leftLeg = new THREE.Mesh(legGeo, pantsMat); leftLeg.position.set(-0.16 * s, 0.375 * s, 0); leftLeg.castShadow = true; group.add(leftLeg);
-            const rightLeg = new THREE.Mesh(legGeo, pantsMat); rightLeg.position.set(0.16 * s, 0.375 * s, 0); rightLeg.castShadow = true; group.add(rightLeg);
+            const leftLeg = new THREE.Mesh(legGeo, pantsMat); leftLeg.position.set(-0.16 * s, 0.375 * s, 0); leftLeg.castShadow = true;
+            leftLeg.userData = { isZombiePart: true, hitZone: 'LEG', isHead: false, isLeg: true }; group.add(leftLeg);
+            const rightLeg = new THREE.Mesh(legGeo, pantsMat); rightLeg.position.set(0.16 * s, 0.375 * s, 0); rightLeg.castShadow = true;
+            rightLeg.userData = { isZombiePart: true, hitZone: 'LEG', isHead: false, isLeg: true }; group.add(rightLeg);
 
             const torsoGeo = new THREE.BoxGeometry(0.62 * s, 0.82 * s, 0.34 * s);
             const torso = new THREE.Mesh(torsoGeo, clothesMat); torso.position.set(0, 1.15 * s, 0); torso.castShadow = true;
-            torso.userData = { isZombiePart: true, isHead: false }; group.add(torso);
+            torso.userData = { isZombiePart: true, hitZone: 'BODY', isHead: false, isLeg: false }; group.add(torso);
 
             const headGeo = new THREE.BoxGeometry(0.46 * s, 0.46 * s, 0.46 * s);
             const head = new THREE.Mesh(headGeo, skinMat); head.position.set(0, 1.82 * s, 0); head.castShadow = true;
-            head.userData = { isZombiePart: true, isHead: true }; group.add(head);
+            head.userData = { isZombiePart: true, hitZone: 'HEAD', isHead: true, isLeg: false }; group.add(head);
 
             const eyeGeo = new THREE.BoxGeometry(0.08 * s, 0.06 * s, 0.05 * s);
             const leftEye = new THREE.Mesh(eyeGeo, eyeMat); leftEye.position.set(-0.11 * s, 1.86 * s, 0.23 * s); group.add(leftEye);
             const rightEye = new THREE.Mesh(eyeGeo, eyeMat); rightEye.position.set(0.11 * s, 1.86 * s, 0.23 * s); group.add(rightEye);
 
             const armGeo = new THREE.BoxGeometry(0.2 * s, 0.2 * s, 0.72 * s);
-            const leftArm = new THREE.Mesh(armGeo, skinMat); leftArm.position.set(-0.42 * s, 1.38 * s, 0.28 * s); leftArm.castShadow = true; leftArm.userData = { isZombiePart: true, isHead: false }; group.add(leftArm);
-            const rightArm = new THREE.Mesh(armGeo, skinMat); rightArm.position.set(0.42 * s, 1.38 * s, 0.28 * s); rightArm.castShadow = true; rightArm.userData = { isZombiePart: true, isHead: false }; group.add(rightArm);
+            const leftArm = new THREE.Mesh(armGeo, skinMat); leftArm.position.set(-0.42 * s, 1.38 * s, 0.28 * s); leftArm.castShadow = true;
+            leftArm.userData = { isZombiePart: true, hitZone: 'BODY', isHead: false, isLeg: false }; group.add(leftArm);
+            const rightArm = new THREE.Mesh(armGeo, skinMat); rightArm.position.set(0.42 * s, 1.38 * s, 0.28 * s); rightArm.castShadow = true;
+            rightArm.userData = { isZombiePart: true, hitZone: 'BODY', isHead: false, isLeg: false }; group.add(rightArm);
 
             const hpBg = new THREE.Mesh(new THREE.PlaneGeometry(0.75 * s, 0.09 * s), new THREE.MeshBasicMaterial({ color: 0x1c1917, side: THREE.DoubleSide }));
-            hpBg.position.set(0, 2.25 * s, 0); group.add(hpBg);
+            hpBg.position.set(0, 2.25 * s, 0); hpBg.userData = { isUI: true }; group.add(hpBg);
 
             const hpFill = new THREE.Mesh(new THREE.PlaneGeometry(0.71 * s, 0.06 * s), new THREE.MeshBasicMaterial({
                 color: isAcid ? 0xa3e635 : (typeConfig.scale > 1.8 ? 0xf43f5e : 0xf59e0b), side: THREE.DoubleSide
             }));
-            hpFill.position.set(0, 2.25 * s, 0.01); group.add(hpFill);
+            hpFill.position.set(0, 2.25 * s, 0.01); hpFill.userData = { isUI: true }; group.add(hpFill);
 
             return { group, parts: { torso, head, leftLeg, rightLeg, leftArm, rightArm, hpBg, hpFill }, materials: [skinMat, clothesMat] };
         }
@@ -1535,15 +1539,22 @@
             const waveMultiplier = 1 + (state.wave - 1) * 0.13;
             const built = createZombieMesh(baseType, typeKey === 'ACID');
 
-            let spawnX, spawnZ;
+            let spawnX = 0, spawnZ = -55;
             if (forcedData) {
                 spawnX = forcedData.x; spawnZ = forcedData.z;
             } else {
-                const angle = Math.random() * Math.PI * 2;
-                const dist = 34 + Math.random() * 28;
                 const limit = CONFIG.arenaSize - 5;
-                spawnX = THREE.MathUtils.clamp(camera.position.x + Math.cos(angle) * dist, -limit, limit);
-                spawnZ = THREE.MathUtils.clamp(camera.position.z + Math.sin(angle) * dist, -limit, limit);
+                const safeRadius = 0.65 * baseType.scale;
+                for (let tries = 0; tries < 16; tries++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const dist = 34 + Math.random() * 28;
+                    const cx = THREE.MathUtils.clamp(camera.position.x + Math.cos(angle) * dist, -limit, limit);
+                    const cz = THREE.MathUtils.clamp(camera.position.z + Math.sin(angle) * dist, -limit, limit);
+                    if (!checkObstacleCollision(cx, cz, safeRadius)) {
+                        spawnX = cx; spawnZ = cz;
+                        break;
+                    }
+                }
             }
 
             built.group.position.set(spawnX, 0, spawnZ);
@@ -1556,10 +1567,15 @@
                 maxHp: Math.round(baseType.hp * waveMultiplier),
                 speed: baseType.speed * (0.95 + Math.random() * 0.12) * Math.min(1.45, 1 + (state.wave - 1) * 0.04),
                 damage: baseType.damage, scoreValue: baseType.score, scale: baseType.scale,
-                attackCooldown: 0, animOffset: Math.random() * 100, flashTimer: 0
+                attackCooldown: 0, animOffset: Math.random() * 100, flashTimer: 0,
+                chargeCooldown: 4.5 + Math.random() * 2.5, chargeState: 'IDLE', chargeTimer: 0, chargeDirX: 0, chargeDirZ: 0
             };
 
-            built.group.traverse(child => { if (child.isMesh) child.userData.zombieRef = zombieObj; });
+            built.group.traverse(child => {
+                if (child.isMesh && child.userData && child.userData.isZombiePart) {
+                    child.userData.zombieRef = zombieObj;
+                }
+            });
             zombies.push(zombieObj);
             if (!forcedData) state.zombiesToSpawn--;
             state.zombiesAlive = zombies.length;
@@ -2021,23 +2037,58 @@
 
             if (mouse.isDown && WEAPONS[state.currentWeaponIdx].auto) fireWeapon();
 
+            if (state.isDowned && (!net.connected || !net.ally.active || net.ally.isDowned)) {
+                triggerGameOver();
+                return;
+            }
+
             if (net.connected && net.ally.active && net.ally.isDowned && !state.isDowned) {
                 const distAlly = Math.hypot(camera.position.x - net.ally.x, camera.position.z - net.ally.z);
                 if (distAlly < 2.8) {
-                    net.ally.isDowned = false; sendNetMessage({ type: 'REVIVE_ALLY' });
+                    net.ally.isDowned = false;
+                    net.ally.hp = Math.round((net.ally.maxHp || 120) * 0.65);
+                    sendNetMessage({ type: 'REVIVE_ALLY' });
                     sound.playPickup(); showCenterAlert(`🤝 VOCÊ REANIMOU ${net.ally.name}!`, 1800);
+                    updateCoopHUD();
                 }
             }
         }
 
+        function steerEntityMove(x, z, dirX, dirZ, stepDist, radius) {
+            const nx = x + dirX * stepDist;
+            const nz = z + dirZ * stepDist;
+            if (!checkObstacleCollision(nx, nz, radius)) return { x: nx, z: nz };
+
+            const angles = [Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, (3 * Math.PI) / 4, -(3 * Math.PI) / 4];
+            for (let i = 0; i < angles.length; i++) {
+                const a = angles[i];
+                const cosA = Math.cos(a), sinA = Math.sin(a);
+                const rx = dirX * cosA - dirZ * sinA;
+                const rz = dirX * sinA + dirZ * cosA;
+                const tx = x + rx * stepDist;
+                const tz = z + rz * stepDist;
+                if (!checkObstacleCollision(tx, tz, radius)) return { x: tx, z: tz };
+            }
+
+            let sx = x, sz = z;
+            if (!checkObstacleCollision(nx, z, radius)) sx = nx;
+            if (!checkObstacleCollision(sx, nz, radius)) sz = nz;
+            return { x: sx, z: sz };
+        }
+
         function updateCoopBotAI(dt) {
-            if (!net.botActive || !net.ally.active || net.ally.isDowned) return;
+            if (!net.botActive || !net.ally.active) return;
+            if (net.ally.isDowned) {
+                if (state.isDowned) triggerGameOver();
+                return;
+            }
             if (state.isDowned) {
                 const dx = camera.position.x - net.ally.x, dz = camera.position.z - net.ally.z;
                 const dist = Math.hypot(dx, dz);
                 net.ally.yaw = Math.atan2(-dx, -dz);
                 if (dist > 2.1) {
-                    net.ally.x += (dx / dist) * 7.5 * dt; net.ally.z += (dz / dist) * 7.5 * dt;
+                    const stepped = steerEntityMove(net.ally.x, net.ally.z, dx / dist, dz / dist, 7.5 * dt, 0.6);
+                    net.ally.x = stepped.x; net.ally.z = stepped.z;
                 } else {
                     state.isDowned = false; state.health = Math.round(state.maxHealth * 0.65);
                     sound.playPickup(); showCenterAlert(`🤝 ${net.ally.name} REANIMOU VOCÊ!`, 2200); updateHUD();
@@ -2049,9 +2100,8 @@
             const followDz = (camera.position.z + Math.cos(state.yaw + 1.1) * 3.8) - net.ally.z;
             const followDist = Math.hypot(followDx, followDz);
             if (followDist > 2.2) {
-                const stepX = (followDx / followDist) * 6.8 * dt, stepZ = (followDz / followDist) * 6.8 * dt;
-                if (!checkObstacleCollision(net.ally.x + stepX, net.ally.z, 0.6)) net.ally.x += stepX;
-                if (!checkObstacleCollision(net.ally.x, net.ally.z + stepZ, 0.6)) net.ally.z += stepZ;
+                const stepped = steerEntityMove(net.ally.x, net.ally.z, followDx / followDist, followDz / followDist, 6.8 * dt, 0.6);
+                net.ally.x = stepped.x; net.ally.z = stepped.z;
             }
 
             let nearestZ = null, minDist = 36;
@@ -2063,10 +2113,14 @@
 
             if (nearestZ) {
                 const zdx = nearestZ.mesh.position.x - net.ally.x, zdz = nearestZ.mesh.position.z - net.ally.z;
-                net.ally.yaw = Math.atan2(zdx, zdz);
+                net.ally.yaw = Math.atan2(-zdx, -zdz);
                 if (minDist < 1.5) {
                     net.ally.hp = Math.max(0, net.ally.hp - 12 * dt);
-                    if (net.ally.hp <= 0) { net.ally.isDowned = true; showCenterAlert(`🆘 ${net.ally.name} FERIDA!`, 2800); }
+                    if (net.ally.hp <= 0) {
+                        net.ally.isDowned = true;
+                        showCenterAlert(`🆘 ${net.ally.name} FERIDA!`, 2800);
+                        if (state.isDowned) triggerGameOver();
+                    }
                     updateCoopHUD();
                 }
                 net.ally.botFireCooldown -= dt;
@@ -2150,9 +2204,41 @@
                     z.parts.hpBg.lookAt(camera.position); z.parts.hpFill.lookAt(camera.position);
                 }
 
-                if (dist > 1.35) {
-                    const dirX = dx / dist, dirZ = dz / dist;
-                    let moveX = dirX * z.speed * dt, moveZ = dirZ * z.speed * dt;
+                const zRadius = 0.45 * z.scale;
+                const attackRange = 1.1 + 0.45 * z.scale;
+
+                if (z.type === 'BRUTE' || z.type === 'BOSS') {
+                    if (z.chargeState === 'IDLE') {
+                        z.chargeCooldown = (z.chargeCooldown || 0) - dt;
+                        if (z.chargeCooldown <= 0 && dist > 6.0 && dist < 22.0) {
+                            z.chargeState = 'WINDUP';
+                            z.chargeTimer = 0.55;
+                            z.chargeDirX = dx / dist;
+                            z.chargeDirZ = dz / dist;
+                            z.materials.forEach(mat => mat.emissive.setHex(0xd97706));
+                            z.flashTimer = 0.55;
+                        }
+                    } else if (z.chargeState === 'WINDUP') {
+                        z.chargeTimer -= dt;
+                        if (z.chargeTimer <= 0) {
+                            z.chargeState = 'CHARGING';
+                            z.chargeTimer = 0.9;
+                            spawnShockwaveRing(z.mesh.position.x, z.mesh.position.z, 0xf43f5e, 3.2);
+                        }
+                        continue;
+                    } else if (z.chargeState === 'CHARGING') {
+                        z.chargeTimer -= dt;
+                        const stepped = steerEntityMove(z.mesh.position.x, z.mesh.position.z, z.chargeDirX, z.chargeDirZ, z.speed * 2.3 * dt, zRadius);
+                        z.mesh.position.x = stepped.x; z.mesh.position.z = stepped.z;
+                        if (z.chargeTimer <= 0 || dist <= attackRange) {
+                            z.chargeState = 'IDLE';
+                            z.chargeCooldown = 6.5;
+                        }
+                    }
+                }
+
+                if (dist > attackRange) {
+                    let moveDirX = dx / dist, moveDirZ = dz / dist;
 
                     for (let j = 0; j < zombies.length; j++) {
                         if (i === j) continue;
@@ -2161,19 +2247,22 @@
                         const oDistSq = ox * ox + oz * oz;
                         if (oDistSq < 1.1 && oDistSq > 0.001) {
                             const oDist = Math.sqrt(oDistSq);
-                            moveX += (ox / oDist) * 2.0 * dt; moveZ += (oz / oDist) * 2.0 * dt;
+                            moveDirX += (ox / oDist) * 0.45; moveDirZ += (oz / oDist) * 0.45;
                         }
                     }
 
-                    const zRadius = 0.45 * z.scale;
-                    if (!checkObstacleCollision(z.mesh.position.x + moveX, z.mesh.position.z, zRadius)) z.mesh.position.x += moveX;
-                    if (!checkObstacleCollision(z.mesh.position.x, z.mesh.position.z + moveZ, zRadius)) z.mesh.position.z += moveZ;
+                    const dirLen = Math.hypot(moveDirX, moveDirZ) || 1;
+                    moveDirX /= dirLen; moveDirZ /= dirLen;
+
+                    const stepped = steerEntityMove(z.mesh.position.x, z.mesh.position.z, moveDirX, moveDirZ, z.speed * dt, zRadius);
+                    z.mesh.position.x = stepped.x; z.mesh.position.z = stepped.z;
 
                     const walkPhase = elapsedTime * z.speed * 2.3 + z.animOffset;
                     z.parts.leftLeg.rotation.x = Math.sin(walkPhase) * 0.55;
                     z.parts.rightLeg.rotation.x = -Math.sin(walkPhase) * 0.55;
                 } else if (targetingLocal) {
-                    if (z.attackCooldown <= 0) {
+                    const targetPlayerY = state.isDowned ? 0.65 : CONFIG.playerHeight;
+                    if (z.attackCooldown <= 0 && Math.abs(camera.position.y - targetPlayerY) < 1.3) {
                         takePlayerDamage(z.damage); z.attackCooldown = 1.05;
                     }
                 }

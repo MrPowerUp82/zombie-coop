@@ -347,3 +347,80 @@ test('Task 1.4: shop_pauses_zombies_in_solo - zombies do not move or attack whil
     assert.equal(z.mesh.position.x, startX, 'zombie should not move while shop is open in Solo mode');
     assert.equal(game.state.health, startHp, 'player should not take damage while shop is open in Solo mode');
 });
+
+test('Task 2.1: segmented_hitboxes_exclude_ui - body parts have hitZone and floating HP bar has no zombieRef', () => {
+    const { game } = createGameHarness();
+    const z = game.spawnZombie({ uid: 201, type: 'WALKER', x: 10, z: 10, hp: 70 });
+
+    assert.equal(z.parts.head.userData.hitZone, 'HEAD');
+    assert.equal(z.parts.head.userData.isHead, true);
+    assert.equal(z.parts.head.userData.zombieRef, z);
+
+    assert.equal(z.parts.torso.userData.hitZone, 'BODY');
+    assert.equal(z.parts.torso.userData.zombieRef, z);
+
+    assert.equal(z.parts.leftLeg.userData.hitZone, 'LEG');
+    assert.equal(z.parts.leftLeg.userData.isLeg, true);
+    assert.equal(z.parts.leftLeg.userData.zombieRef, z);
+
+    assert.equal(z.parts.hpBg.userData.zombieRef, undefined, 'hpBg must not have zombieRef');
+    assert.equal(z.parts.hpFill.userData.zombieRef, undefined, 'hpFill must not have zombieRef');
+});
+
+test('Task 2.2: safe_spawn_avoids_obstacles - natural spawns never overlap obstacles', () => {
+    const { game } = createGameHarness();
+    game.zombies.length = 0;
+    for (let i = 0; i < 40; i++) {
+        const z = game.spawnZombie();
+        const collides = game.checkObstacleCollision(z.mesh.position.x, z.mesh.position.z, 0.45 * z.scale);
+        assert.equal(collides, false, `Zombie ${i} spawned inside an obstacle at (${z.mesh.position.x}, ${z.mesh.position.z})`);
+    }
+});
+
+test('Task 2.3: zombie_obstacle_steering - zombie blocked by crate steers laterally around it', () => {
+    const { game } = createGameHarness();
+    game.zombies.length = 0;
+    // Crate at { x: 0, z: -26, w: 6, h: 2.2, d: 2.2 } -> minZ: -27.1, maxZ: -24.9, minX: -3, maxX: 3
+    game.camera.position.set(0, game.CONFIG.playerHeight, -20);
+    const z = game.spawnZombie({ uid: 202, type: 'WALKER', x: 0.2, z: -28.0, hp: 70 });
+
+    for (let step = 0; step < 15; step++) {
+        game.updateZombies(0.05, step * 0.05);
+    }
+
+    assert.ok(Math.abs(z.mesh.position.x - 0.2) > 0.3, `zombie should steer laterally around obstacle, got x=${z.mesh.position.x}`);
+});
+
+test('Task 2.4: sheva_ai_facing_revive_and_mutual_downed - Sheva faces zombie, restores HP on revive, and triggers gameover on mutual down', () => {
+    const { game } = createGameHarness();
+    game.startGame();
+    game.net.botActive = true;
+    game.net.connected = true;
+    game.net.ally.active = true;
+    game.net.ally.isDowned = false;
+    game.net.ally.hp = 120;
+    game.net.ally.maxHp = 120;
+    game.net.ally.x = 0;
+    game.net.ally.z = 0;
+
+    game.zombies.length = 0;
+    game.spawnZombie({ uid: 203, type: 'WALKER', x: 0, z: 10, hp: 70 });
+
+    game.updateCoopBotAI(0.05);
+    // Zombie is at +Z (zdz = +10, zdx = 0). Since avatar forward is -Z, Math.atan2(-zdx, -zdz) = Math.atan2(0, -10) = Math.PI or -Math.PI
+    assert.ok(Math.abs(Math.abs(game.net.ally.yaw) - Math.PI) < 0.01, `Sheva yaw should face +Z (Math.PI), got ${game.net.ally.yaw}`);
+
+    // Player revives downed Sheva -> HP restored to 65%
+    game.net.ally.isDowned = true;
+    game.net.ally.hp = 0;
+    game.camera.position.set(1.0, game.CONFIG.playerHeight, 0);
+    game.updatePlayer(0.016);
+    assert.equal(game.net.ally.isDowned, false);
+    assert.equal(game.net.ally.hp, Math.round(120 * 0.65), 'Reviving ally must restore 65% of maxHp');
+
+    // Mutual downed -> Game Over
+    game.state.isDowned = true;
+    game.net.ally.isDowned = true;
+    game.updatePlayer(0.016);
+    assert.equal(game.state.status, 'GAMEOVER', 'Mutual downed state must trigger GAMEOVER');
+});
