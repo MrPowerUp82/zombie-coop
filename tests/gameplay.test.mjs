@@ -255,7 +255,7 @@ export function createGameHarness() {
         get explosiveBarrels() { return explosiveBarrels; },
         initThreeJS, startGame, pauseGame, triggerGameOver, toggleShopModal,
         updatePlayer, performTacticalDash, reloadWeapon, switchWeapon, fireWeapon,
-        takePlayerDamage, spawnZombie, updateZombies, updateCoopBotAI,
+        takePlayerDamage, spawnZombie, updateZombies, updateCoopBotAI, toggleCoopBot, updateNetworkSync,
         damageZombie, killZombie, updateEffectsAndCrates, checkObstacleCollision,
         get performMeleeAttack() { return typeof performMeleeAttack !== 'undefined' ? performMeleeAttack : undefined; },
         get spawnLootDrop() { return typeof spawnLootDrop !== 'undefined' ? spawnLootDrop : undefined; },
@@ -514,4 +514,153 @@ test('Task 3.3: dying_zombies_and_magnetic_loot_drops - killed zombies enter dyi
     drop.mesh.position.set(0, 0.5, -0.8);
     game.updateEffectsAndCrates(0.1, 1.1);
     assert.equal(game.state.combo, 10, 'COMBO drop must increase combo up to the new 10x cap');
+});
+
+test('Review Fix 1: stagger_probabilities_and_leg_damage_scaling - respects per-type stagger probabilities and 0.85x leg multiplier', () => {
+    const { game, sandbox } = createGameHarness();
+    game.startGame();
+    game.zombies.length = 0;
+
+    // High roll (0.9) should NOT stagger WALKER on HEAD (65%) or LEG (75%)
+    sandbox.Math.random = () => 0.9;
+    const zNoStagger = game.spawnZombie({ uid: 401, type: 'WALKER', x: 0, z: -5, hp: 100 });
+    game.damageZombie(zNoStagger, 20, zNoStagger.mesh.position.clone(), true, false, 'HEAD');
+    assert.equal(zNoStagger.staggerTimer, 0, 'Roll 0.9 > 0.65 must not stagger WALKER on HEAD');
+
+    // BOSS should NEVER stagger on LEG even with roll 0.05 (0% chance)
+    sandbox.Math.random = () => 0.05;
+    const zBoss = game.spawnZombie({ uid: 402, type: 'BOSS', x: 0, z: -8, hp: 500 });
+    game.damageZombie(zBoss, 100, zBoss.mesh.position.clone(), false, false, 'LEG');
+    assert.equal(zBoss.staggerTimer, 0, 'BOSS must have 0% stagger chance on LEG hits');
+    assert.equal(zBoss.hp, 500 - 85, 'LEG hitZone in damageZombie must scale damage by 0.85x');
+});
+
+test('Review Fix 2: brute_charge_speed_and_stagger_interrupt - charging brute moves at 2.3x speed (not 3.3x) and stagger resets chargeState', () => {
+    const { game, sandbox } = createGameHarness();
+    game.startGame();
+    game.zombies.length = 0;
+    game.obstacles.length = 0;
+    game.camera.position.set(0, game.CONFIG.playerHeight, 0);
+
+    const brute = game.spawnZombie({ uid: 403, type: 'BRUTE', x: 0, z: -12, hp: 300 });
+    brute.speed = 2.5;
+    brute.chargeState = 'CHARGING';
+    brute.chargeTimer = 0.8;
+    brute.chargeDirX = 0;
+    brute.chargeDirZ = 1;
+
+    game.updateZombies(0.1, 1.0);
+    // Expected step is 2.5 * 2.3 * 0.1 = 0.575m (not 0.825m from double-stepping)
+    assert.ok(Math.abs(brute.mesh.position.z - (-12 + 0.575)) < 0.02, `Expected z ~ -11.425, got ${brute.mesh.position.z}`);
+
+    // Staggering a charging brute must reset chargeState to IDLE
+    sandbox.Math.random = () => 0.1;
+    game.damageZombie(brute, 30, brute.mesh.position.clone(), true, false, 'HEAD');
+    assert.equal(brute.staggerTimer, 2.8);
+    game.updateZombies(0.1, 1.1);
+    assert.equal(brute.chargeState, 'IDLE', 'Staggered Brute must reset chargeState to IDLE');
+});
+
+test('Review Fix 3: shop_pauses_bot_ai_and_ticks_cooldowns - SHOP mode in Bot Co-op pauses Sheva AI and still ticks player invulnTimer', () => {
+    const { game } = createGameHarness();
+    game.startGame();
+    game.toggleCoopBot();
+    game.zombies.length = 0;
+
+    // Place a zombie right next to Sheva
+    const z = game.spawnZombie({ uid: 404, type: 'WALKER', x: game.net.ally.x + 0.5, z: game.net.ally.z, hp: 100 });
+    const shevaHpBefore = game.net.ally.hp;
+    game.state.invulnTimer = 0.35;
+
+    // Enter SHOP mode
+    game.toggleShopModal();
+    assert.equal(game.state.status, 'SHOP');
+
+    // Simulate frame in SHOP mode via updateNetworkSync
+    game.updateNetworkSync(1.0, 0.2);
+    assert.equal(game.net.ally.hp, shevaHpBefore, 'Sheva must not take zombie damage while SHOP is open in Bot mode');
+    assert.equal(z.hp, 100, 'Sheva must not shoot zombies while SHOP is open in Bot mode');
+    assert.ok(game.state.invulnTimer < 0.35, 'invulnTimer must still tick down while in SHOP');
+});
+
+test('Review Fix 4: start_game_resets_ally_and_cancels_wave_timers - startGame resets downed Sheva and clears pending wave timeouts', () => {
+    const { game } = createGameHarness();
+    game.startGame();
+    game.toggleCoopBot();
+    game.net.ally.isDowned = true;
+    game.net.ally.hp = 0;
+
+    // Restart game
+    game.startGame();
+    assert.equal(game.net.ally.isDowned, false, 'startGame must reset net.ally.isDowned to false');
+    assert.equal(game.net.ally.hp, game.net.ally.maxHp, 'startGame must restore net.ally.hp to maxHp');
+});
+
+test('Review Fix 5: surviving_melee_resets_stagger_pose_and_knee_lowers_mesh - KNEE stagger lowers mesh.position.y and finisher resets pose on surviving Brute', () => {
+    const { game } = createGameHarness();
+    game.startGame();
+    game.zombies.length = 0;
+    game.camera.position.set(0, game.CONFIG.playerHeight, 0);
+
+    const brute = game.spawnZombie({ uid: 405, type: 'BRUTE', x: 0, z: -2.2, hp: 300 });
+    brute.staggerTimer = 2.5;
+    brute.staggerType = 'KNEE';
+
+    game.updateZombies(0.1, 1.0);
+    assert.ok(brute.mesh.position.y < -0.2, 'KNEE stagger must lower zombie mesh.position.y');
+
+    // Execute melee finisher on 300 HP Brute (survives with 120 HP)
+    game.performMeleeAttack();
+    assert.equal(brute.hp, 120);
+    assert.equal(brute.staggerTimer, 0);
+    assert.equal(brute.mesh.position.y, 0, 'Surviving Brute must have mesh.position.y reset to 0 after melee finisher');
+    assert.equal(brute.parts.torso.rotation.x, 0, 'Surviving Brute must have torso.rotation.x reset to 0 after melee finisher');
+});
+
+test('Review Fix 6: melee_finisher_combo_step_and_shove_cone - finisher grants +2 combo, steps player forward, guarantees drop, and shove only hits front cone', () => {
+    const { game, sandbox } = createGameHarness();
+    game.startGame();
+    game.zombies.length = 0;
+    game.lootDrops.length = 0;
+    game.camera.position.set(0, game.CONFIG.playerHeight, 0);
+    game.state.yaw = 0; // Facing -Z
+    sandbox.Math.random = () => 0.99; // High roll so non-guaranteed drop would fail
+
+    const zStaggered = game.spawnZombie({ uid: 406, type: 'WALKER', x: 0, z: -2.5, hp: 100 });
+    zStaggered.staggerTimer = 2.0;
+    zStaggered.staggerType = 'HEAD';
+    const comboBefore = game.state.combo;
+
+    game.performMeleeAttack();
+    assert.equal(game.state.combo, comboBefore + 2, 'Melee finisher kill must grant +2 combo');
+    assert.equal(game.state.comboTimer, 5.5, 'Melee finisher kill must set comboTimer to 5.5s');
+    assert.ok(game.camera.position.z < -0.5, 'Melee finisher must step player 0.8m toward target');
+    assert.equal(game.lootDrops.length, 1, 'Melee finisher kill must guarantee a loot drop even on 0.99 random roll');
+
+    // Shove cone check: zombie behind player (+Z when yaw=0) should NOT be hit by defensive shove
+    game.zombies.length = 0;
+    game.state.meleeCooldown = 0;
+    game.camera.position.set(0, game.CONFIG.playerHeight, 0);
+    const zBehind = game.spawnZombie({ uid: 407, type: 'WALKER', x: 0, z: 1.5, hp: 100 });
+    const zFront = game.spawnZombie({ uid: 408, type: 'WALKER', x: 0, z: -1.5, hp: 100 });
+
+    game.performMeleeAttack();
+    assert.equal(zBehind.hp, 100, 'Defensive shove must not hit zombie behind player');
+    assert.equal(zFront.hp, 65, 'Defensive shove must hit zombie in front cone');
+    assert.equal(zFront.attackCooldown, 1.1, 'Defensive shove must set z.attackCooldown = 1.1');
+});
+
+test('Review Fix 7: loot_drops_cap_lifetime_and_spec_rewards - caps lootDrops at 12 and expires after 18s', () => {
+    const { game } = createGameHarness();
+    game.startGame();
+    game.lootDrops.length = 0;
+
+    for (let i = 0; i < 15; i++) {
+        game.spawnLootDrop({ x: 10 + i, y: 0, z: 10 }, true, false, 'GOLD');
+    }
+    assert.equal(game.lootDrops.length, 12, 'Active lootDrops must be capped at 12');
+    assert.equal(game.lootDrops[0].life, 18, 'Loot drop must start with 18s lifetime');
+
+    game.updateEffectsAndCrates(18.5, 20.0);
+    assert.equal(game.lootDrops.length, 0, 'Loot drops must expire after 18s');
 });
