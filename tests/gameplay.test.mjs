@@ -5,10 +5,8 @@ import vm from 'node:vm';
 import path from 'node:path';
 
 export function createGameHarness() {
-    const htmlPath = path.resolve(process.cwd(), 'index.html');
-    const html = fs.readFileSync(htmlPath, 'utf8');
-    const match = html.match(/<script>([\s\S]*?)<\/script>/);
-    if (!match) throw new Error('Could not find inline <script> in index.html');
+    const jsFiles = ['config.js', 'audio.js', 'network.js', 'entities.js', 'main.js'];
+    const jsCode = jsFiles.map(file => fs.readFileSync(path.resolve(process.cwd(), 'js', file), 'utf8')).join('\n;\n');
 
     const elements = new Map();
     const makeEl = (id = '') => {
@@ -262,7 +260,7 @@ export function createGameHarness() {
         animate
     };`;
 
-    vm.runInNewContext(match[1] + '\n' + exportedVars, sandbox);
+    vm.runInNewContext(jsCode + '\n' + exportedVars, sandbox);
     sandbox.__game.initThreeJS();
     return { game: sandbox.__game, sandbox, windowListeners };
 }
