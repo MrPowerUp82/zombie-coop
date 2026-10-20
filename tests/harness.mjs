@@ -3,7 +3,7 @@ import vm from 'node:vm';
 import path from 'node:path';
 
 export function createGameHarness() {
-    const jsFiles = ['config.js', 'audio.js', 'network.js', 'entities.js', 'shots.js', 'visuals.js', 'main.js'];
+    const jsFiles = ['config.js', 'audio.js', 'network.js', 'entities.js', 'weapon-animations.js', 'shots.js', 'visuals.js', 'main.js'];
     const jsCode = jsFiles.map(file => fs.readFileSync(path.resolve(process.cwd(), 'js', file), 'utf8')).join('\n;\n');
 
     const elements = new Map();
@@ -240,7 +240,7 @@ export function createGameHarness() {
 
     const exportedVars = `
     globalThis.__game = {
-        WEAPONS, CONFIG, state, net, keys, mouse, mobileInput, dom,
+        WEAPONS, CONFIG, state, net, keys, mouse, mobileInput, dom, sound,
         get scene() { return scene; },
         get renderer() { return renderer; },
         get gfxQuality() { return gfxQuality; },
@@ -248,6 +248,8 @@ export function createGameHarness() {
         get bulletTracers() { return bulletTracers; },
         get muzzleFlash() { return muzzleFlash; },
         get muzzleLight() { return muzzleLight; },
+        get weaponPresentation() { return weaponPresentation; },
+        beginWeaponReload, cancelWeaponReload, registerWeaponShot, equipWeaponPresentation, updateWeaponPresentation,
         createBulletTracer, emitShotImpact, emitShotSmoke, updateShotEffects, clearShotEffects, activateLocalMuzzle,
         get graphicsAutoRatio() { return graphicsAutoRatio; },
         get shadersPrewarmed() { return shadersPrewarmed; },
@@ -260,7 +262,7 @@ export function createGameHarness() {
         get lootDrops() { return typeof lootDrops !== 'undefined' ? lootDrops : undefined; },
         get supplyCrates() { return supplyCrates; },
         get explosiveBarrels() { return explosiveBarrels; },
-        initThreeJS, startGame, pauseGame, triggerGameOver, toggleShopModal,
+        initThreeJS, startGame, pauseGame, triggerGameOver, toggleShopModal, toggleFlashlight,
         updatePlayer, performTacticalDash, reloadWeapon, switchWeapon, fireWeapon,
         takePlayerDamage, spawnZombie, updateZombies, updateCoopBotAI, toggleCoopBot, updateNetworkSync,
         damageZombie, killZombie, updateEffectsAndCrates, checkObstacleCollision,

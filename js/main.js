@@ -37,6 +37,7 @@ function initThreeJS() {
     buildEnvironment();
     buildFirstPersonWeapons();
     buildCoopAllyAvatar();
+    if (typeof sound.preloadWeaponAudio === 'function') sound.preloadWeaponAudio();
     if (typeof initializeCinematicPost === 'function') initializeCinematicPost();
     // Define LOD/sombras após criar os recursos e antes de compilar os shaders.
     applyGraphicsQuality(gfxQuality, false);
@@ -130,6 +131,7 @@ function cancelReload() {
         state.reloadTimerId = null;
     }
     state.isReloading = false;
+    if (typeof cancelWeaponReload === 'function') cancelWeaponReload();
 }
 
 function switchWeapon(index) {
@@ -137,13 +139,18 @@ function switchWeapon(index) {
     cancelReload(); setAiming(false); dom.centerAlert.classList.add('hidden');
     state.currentWeaponIdx = index;
     weaponModels.forEach((m, i) => { m.visible = (i === index); });
+    const gunTip = [-.39,-.72,-.74,-.94][index];
+    if (muzzleFlash) muzzleFlash.position.z = gunTip;
+    if (muzzleLight) muzzleLight.position.z = gunTip;
+
     for (let i = 0; i < WEAPONS.length; i++) {
         const btn = document.getElementById(`slot-wep-${i}`);
         if (!btn) continue;
         if (i === index) btn.className = 'interactive px-2.5 py-2 rounded-lg bg-amber-500/25 border border-amber-400 text-left transition flex flex-col min-w-[85px] scale-105';
         else btn.className = 'interactive px-2.5 py-2 rounded-lg bg-slate-950/60 border border-amber-900/40 text-left transition flex flex-col min-w-[85px] opacity-75';
     }
-    sound.playReload(); updateHUD();
+    if (typeof equipWeaponPresentation === 'function') equipWeaponPresentation(index);
+    sound.playEquip(WEAPONS[index].id); updateHUD();
 }
 
 function setAiming(aim) {
@@ -163,6 +170,7 @@ function startWave(waveNum) {
 
     if (state.bossSpawnTimerId) { clearTimeout(state.bossSpawnTimerId); state.bossSpawnTimerId = null; }
     const isBossWave = (waveNum % 3 === 0);
+    sound.playWaveStart(isBossWave);
     if (isBossWave && net.mode !== 'CLIENT') {
         state.bossSpawnTimerId = setTimeout(() => {
             state.bossSpawnTimerId = null;
@@ -172,6 +180,7 @@ function startWave(waveNum) {
                     hp: Math.round(ZOMBIE_TYPES.BOSS.hp * (1 + (waveNum - 3) * 0.25))
                 });
                 sound.playExplosion();
+                sound.playSample('zombie_attack', .8);
                 showCenterAlert('☠️ ALERTA RE5: MAJINI NÉMESIS ATIVADO!', 3500);
             }
         }, 1500);
@@ -186,7 +195,7 @@ function startWave(waveNum) {
 function throwGrenade() {
     if (state.status !== 'PLAYING' || state.isDowned) return;
     if (state.grenades <= 0) { showCenterAlert('SEM GRANADAS! COMPRE NA LOJA [B]', 1000); sound.playEmptyGun(); return; }
-    state.grenades--; updateHUD(); sound.playShoot('PISTOL');
+    state.grenades--; updateHUD(); sound.playSample('grenade_throw', .73);
 
     const gMesh = new THREE.Mesh(
         new THREE.SphereGeometry(0.18, 8, 8),
@@ -228,6 +237,13 @@ function performTacticalDash() {
     showCenterAlert('💨 ESQUIVA TÁTICA (DASH)!', 650);
 }
 
+function localGunMuzzleWorld() {
+    if (muzzleFlash && typeof muzzleFlash.getWorldPosition === 'function') {
+        return muzzleFlash.getWorldPosition(new THREE.Vector3());
+    }
+    return new THREE.Vector3(0.32, -0.25, -1.27).applyMatrix4(camera.matrixWorld);
+}
+
 function fireWeapon() {
     if (state.status !== 'PLAYING' || state.isReloading || state.isDowned) return;
     const wep = WEAPONS[state.currentWeaponIdx];
@@ -243,6 +259,7 @@ function fireWeapon() {
 
     state.lastFireTime = now; wepState.mag--; updateHUD(); sound.playShoot(wep.id); ejectShellCasing(wep.id);
     state.weaponRecoil = wep.recoil;
+    if (typeof registerWeaponShot === 'function') registerWeaponShot(state.currentWeaponIdx);
     state.pitch = Math.min(Math.PI / 2.2, state.pitch + wep.recoil * 0.09);
 
     dom.crosshair.classList.add('crosshair-expand');
@@ -252,7 +269,7 @@ function fireWeapon() {
     shotFX.fireCount++;
     // Fumaça fina no cano para armas pesadas; intervalos na rajada evitam sobrecarga.
     if (wep.id !== 'RIFLE' || shotFX.fireCount % 3 === 0) {
-        const smokeOrigin = new THREE.Vector3(0.32,-0.25,-1.27).applyMatrix4(camera.matrixWorld);
+        const smokeOrigin = localGunMuzzleWorld();
         emitShotSmoke(smokeOrigin,wep.id==='SHOTGUN'?3:wep.id==='RAILGUN'?2:1);
     }
 
@@ -261,7 +278,7 @@ function fireWeapon() {
     explosiveBarrels.forEach(b => { if (!b.exploded) b.mesh.traverse(c => { if (c.isMesh) targetMeshes.push(c); }); });
     obstacles.forEach(o => targetMeshes.push(o.mesh));
 
-    const barrelTip = new THREE.Vector3(0.32, -0.25, -1.27).applyMatrix4(camera.matrixWorld);
+    const barrelTip = localGunMuzzleWorld();
     const dmgMult = 1 + (state.perks.damageLvl - 1) * 0.25;
     const effectiveSpread = state.isAiming ? wep.spread * 0.2 : wep.spread;
     const tracerColor = shotStyle(wep.id).color;
@@ -289,6 +306,7 @@ function fireWeapon() {
             } else {
                 spawnImpactParticles(hit.point, wep.id === 'RAILGUN' ? 0x67e8ff : 0xfbbf24, wep.id === 'SHOTGUN' ? 3 : 5);
                 if (p < 3) emitShotImpact(hit.point, wep.id, 'WALL');
+                if (p === 0) sound.playSample('impact_metal', .44, .94+Math.random()*.1, 0, .08);
             }
         }
         createBulletTracer(barrelTip, endPoint, tracerColor, wep.id);
@@ -307,6 +325,7 @@ function damageZombie(zombie, amount, hitPoint, isHeadshot, fromNetwork = false,
     const finalAmount = (!fromNetwork && resolvedZone === 'LEG') ? Math.round(amount * 0.85) : amount;
 
     sound.playHit(isHeadshot);
+    if (isMelee) sound.playMeleeHit();
     dom.hitmarker.style.opacity = '1';
     setTimeout(() => { dom.hitmarker.style.opacity = '0'; }, 90);
     spawnDamagePopup(hitPoint, finalAmount, isHeadshot || isMelee);
@@ -426,6 +445,8 @@ function performMeleeAttack() {
 
 function killZombie(zombie, isHeadshot, isMelee = false) {
     const deathPos = zombie.mesh.position.clone();
+    const deathDistance = Math.hypot(deathPos.x-camera.position.x,deathPos.z-camera.position.z);
+    sound.playSpatial('zombie_die',deathDistance,0,25,zombie.type === 'BOSS' ? 1 : .65);
     const centerPos = deathPos.clone().add(new THREE.Vector3(0, 1.1, 0));
     spawnGroundDecal(deathPos.x, deathPos.z, zombie.type === 'ACID' ? 0x14532d : 0x451a03, zombie.type === 'BOSS' ? 2.2 : 0.95);
 
@@ -479,6 +500,7 @@ function killZombie(zombie, isHeadshot, isMelee = false) {
 
     updateHUD();
     if (net.mode !== 'CLIENT' && state.zombiesAlive <= 0 && state.zombiesToSpawn <= 0) {
+        sound.playWaveClear();
         state.score += state.wave * 250;
         updateHUD();
         if (state.nextWaveTimerId) clearTimeout(state.nextWaveTimerId);
@@ -497,8 +519,9 @@ function reloadWeapon() {
 
     cancelReload();
     state.isReloading = true;
-    sound.playReload();
     const reloadDuration = wep.reloadTime / (1 + (state.perks.speedLvl - 1) * 0.15);
+    if (typeof beginWeaponReload === 'function') beginWeaponReload(wepIdx, reloadDuration);
+    if (net.connected) sendNetMessage({ type:'RELOAD_FX', weaponId:wep.id, duration:reloadDuration });
     showCenterAlert('RECARREGANDO ARMA...', reloadDuration * 1000);
 
     state.reloadTimerId = setTimeout(() => {
@@ -543,6 +566,7 @@ function updatePlayer(dt) {
     if (mobileInput.active) { moveForward = -mobileInput.moveY; moveRight = mobileInput.moveX; }
 
     const isMoving = Math.abs(moveForward) > 0.05 || Math.abs(moveRight) > 0.05;
+    const previousStepX=camera.position.x, previousStepZ=camera.position.z;
     const speedBonus = 1 + (state.perks.speedLvl - 1) * 0.12;
 
     let currentSpeed = (state.isDowned ? 2.2 : CONFIG.walkSpeed) * speedBonus;
@@ -572,15 +596,17 @@ function updatePlayer(dt) {
     }
 
     if (keys.space && state.isGrounded && !state.isDowned) {
-        state.velocityY = CONFIG.jumpForce; state.isGrounded = false;
+        state.velocityY = CONFIG.jumpForce; state.isGrounded = false; sound.playSample('jump', .47);
     }
     state.velocityY -= CONFIG.gravity * dt;
     camera.position.y += state.velocityY * dt;
 
     const targetHeight = state.isDowned ? 0.65 : CONFIG.playerHeight;
     if (camera.position.y <= targetHeight) {
+        if (!state.isGrounded && state.velocityY < -1) sound.playSample('land', .74);
         camera.position.y = targetHeight; state.velocityY = 0; state.isGrounded = true;
     }
+    sound.updateFootsteps(dt, isMoving && Math.hypot(camera.position.x-previousStepX,camera.position.z-previousStepZ)>0.003, state.isGrounded, keys.shift && currentSpeed > CONFIG.walkSpeed*1.1, state.isDowned);
 
     let shakeX = 0, shakeY = 0;
     if (state.screenShake > 0) {
@@ -619,6 +645,7 @@ function updatePlayer(dt) {
         -0.52 + state.weaponRecoil
     );
     gunGroup.rotation.x = state.isReloading ? -0.45 : state.weaponRecoil * 0.6;
+    if (typeof updateWeaponPresentation === 'function') updateWeaponPresentation(dt);
 
     if (mouse.isDown && WEAPONS[state.currentWeaponIdx].auto) fireWeapon();
 
@@ -633,7 +660,7 @@ function updatePlayer(dt) {
             net.ally.isDowned = false;
             net.ally.hp = Math.round((net.ally.maxHp || 120) * 0.65);
             sendNetMessage({ type: 'REVIVE_ALLY' });
-            sound.playPickup(); showCenterAlert(`🤝 VOCÊ REANIMOU ${net.ally.name}!`, 1800);
+            sound.playHeal(); showCenterAlert(`🤝 VOCÊ REANIMOU ${net.ally.name}!`, 1800);
             updateCoopHUD();
         }
     }
@@ -742,7 +769,7 @@ function updateZombies(dt, elapsedTime) {
                     z.chargeState = 'IDLE';
                     z.chargeCooldown = 6.5;
                     if (postDist <= attackRange && z.attackCooldown <= 0) {
-                        if (targetingLocal) takePlayerDamage(z.damage);
+                        if (targetingLocal) { sound.playSpatial('zombie_attack',postDist,0,15,.7);takePlayerDamage(z.damage); }
                         else if (net.connected && net.mode === 'HOST') sendNetMessage({ type: 'REMOTE_DAMAGE', amount: z.damage });
                         z.attackCooldown = 1.05;
                     }
@@ -778,6 +805,7 @@ function updateZombies(dt, elapsedTime) {
             animateZombiePose(z, elapsedTime, false);
             if (z.attackCooldown <= 0) {
                 if (targetingLocal && Math.abs(camera.position.y - (state.isDowned ? 0.65 : CONFIG.playerHeight)) < 1.3) {
+                    sound.playSpatial('zombie_attack',dist,0,15,.65);
                     takePlayerDamage(z.damage); z.attackCooldown = 1.05;
                 } else if (!targetingLocal && net.connected && net.mode === 'HOST') {
                     sendNetMessage({ type: 'REMOTE_DAMAGE', amount: z.damage });
@@ -831,7 +859,7 @@ function updateEffectsAndCrates(dt, elapsedTime) {
         }
         const newDist = Math.hypot(camera.position.x - drop.mesh.position.x, camera.position.z - drop.mesh.position.z);
         if (newDist <= 1.3) {
-            sound.playPickup();
+            if (drop.type === 'HERB') sound.playHeal(); else sound.playPickup();
             if (drop.type === 'GOLD') {
                 const bonus = drop.isBoss ? 600 : (150 + Math.floor(Math.random() * 201));
                 state.score += bonus;
@@ -885,7 +913,7 @@ function updateEffectsAndCrates(dt, elapsedTime) {
         c.mesh.position.y = c.baseY + Math.sin(elapsedTime * 3 + c.phase) * 0.18;
         const dist = Math.hypot(camera.position.x - c.mesh.position.x, camera.position.z - c.mesh.position.z);
         if (dist < 1.9) {
-            sound.playPickup();
+            if (c.type === 'HEALTH') sound.playHeal(); else sound.playPickup();
             if (c.type === 'HEALTH') {
                 state.health = Math.min(state.maxHealth, state.health + 40);
                 dom.healOverlay.style.opacity = '1'; setTimeout(() => { dom.healOverlay.style.opacity = '0'; }, 350);
@@ -905,7 +933,10 @@ function updateEffectsAndCrates(dt, elapsedTime) {
         for (let i = activeGrenades.length - 1; i >= 0; i--) {
             const g = activeGrenades[i];
             g.timer -= dt; g.vel.y -= 18 * dt; g.mesh.position.addScaledVector(g.vel, dt);
-            if (g.mesh.position.y < 0.2) { g.mesh.position.y = 0.2; g.vel.y *= -0.45; }
+            if (g.mesh.position.y < 0.2) {
+                if (!g.hitGround) { sound.playSample('grenade_bounce',.45);g.hitGround=true; }
+                g.mesh.position.y = 0.2; g.vel.y *= -0.45;
+            }
             if (g.timer <= 0) {
                 sound.playExplosion();
                 const pos = g.mesh.position.clone();
@@ -937,7 +968,7 @@ function updateEffectsAndCrates(dt, elapsedTime) {
                 const dx = nearestZ.mesh.position.x - t.mesh.position.x, dz = nearestZ.mesh.position.z - t.mesh.position.z;
                 t.headMesh.rotation.y = Math.atan2(dx, dz);
                 if (t.cooldown <= 0) {
-                    t.cooldown = 0.28; sound.playShoot('PISTOL');
+                    t.cooldown = 0.28; sound.playSample('turret_fire',.32,1,0,.09);
                     const startPos = t.mesh.position.clone().add(new THREE.Vector3(0, 1.05, 0));
                     const hitPos = nearestZ.mesh.position.clone().add(new THREE.Vector3(0, 1.25, 0));
                     createBulletTracer(startPos, hitPos, shotStyle('RIFLE').color, 'RIFLE');
@@ -1073,10 +1104,12 @@ function showCenterAlert(text, duration = 1200) {
 
 function toggleShopModal() {
     if (state.status === 'PLAYING') {
+        sound.playUiClick();
         state.status = 'SHOP'; mouse.isDown = false;
         if (document.pointerLockElement) document.exitPointerLock();
         updateHUD(); dom.shopModal.classList.remove('hidden');
     } else if (state.status === 'SHOP') {
+        sound.playUiClick();
         state.status = 'PLAYING'; dom.shopModal.classList.add('hidden');
         requestPointerLockSafely();
     }
@@ -1086,28 +1119,28 @@ function buyPerk(perkType) {
     sound.init();
     if (perkType === 'DAMAGE') {
         const cost = state.perks.damageLvl * 400;
-        if (state.score < cost) { showCenterAlert('CRÉDITOS INSUFICIENTES!', 1000); return; }
+        if (state.score < cost) { sound.playUiDeny();showCenterAlert('CRÉDITOS INSUFICIENTES!', 1000); return; }
         state.score -= cost; state.perks.damageLvl++; sound.playPickup(); showCenterAlert('🔥 PODER DE FOGO AUMENTADO!', 1400);
     } else if (perkType === 'SPEED') {
         const cost = state.perks.speedLvl * 350;
-        if (state.score < cost) { showCenterAlert('CRÉDITOS INSUFICIENTES!', 1000); return; }
+        if (state.score < cost) { sound.playUiDeny();showCenterAlert('CRÉDITOS INSUFICIENTES!', 1000); return; }
         state.score -= cost; state.perks.speedLvl++; sound.playPickup(); showCenterAlert('⚡ COLETE TÁTICO MELHORADO!', 1400);
     } else if (perkType === 'HEALTH') {
         const cost = state.perks.healthLvl * 300;
-        if (state.score < cost) { showCenterAlert('CRÉDITOS INSUFICIENTES!', 1000); return; }
+        if (state.score < cost) { sound.playUiDeny();showCenterAlert('CRÉDITOS INSUFICIENTES!', 1000); return; }
         state.score -= cost; state.perks.healthLvl++; state.maxHealth += 25; state.health = state.maxHealth; state.isDowned = false;
-        sound.playPickup(); showCenterAlert('💉 SPRAY DE CURA APLICADO!', 1400);
+        sound.playHeal(); showCenterAlert('💉 SPRAY DE CURA APLICADO!', 1400);
     } else if (perkType === 'AMMO_BARRELS') {
         const cost = 250;
-        if (state.score < cost) { showCenterAlert('CRÉDITOS INSUFICIENTES!', 1000); return; }
+        if (state.score < cost) { sound.playUiDeny();showCenterAlert('CRÉDITOS INSUFICIENTES!', 1000); return; }
         state.score -= cost;
         WEAPONS.forEach((w, idx) => { state.weaponsState[idx].mag = w.magSize; state.weaponsState[idx].reserve = w.reserveMax; });
         state.grenades = Math.min(6, state.grenades + 3); spawnExplosiveBarrels();
         sound.playPickup(); showCenterAlert('💥 MUNIÇÃO CHEIA & BARRIS REPOSICIONADOS!', 1400);
     } else if (perkType === 'TURRET') {
         const cost = 500;
-        if (state.score < cost) { showCenterAlert('CRÉDITOS INSUFICIENTES!', 1000); return; }
-        if (deploySentryTurret()) { state.score -= cost; sound.playPickup(); showCenterAlert('🤖 TORRETA B.S.A.A. IMPLANTADA!', 1500); }
+        if (state.score < cost) { sound.playUiDeny();showCenterAlert('CRÉDITOS INSUFICIENTES!', 1000); return; }
+        if (deploySentryTurret()) { state.score -= cost; sound.playSample('sentry_deploy',.7); showCenterAlert('🤖 TORRETA B.S.A.A. IMPLANTADA!', 1500); }
     }
     updateHUD();
 }
@@ -1125,6 +1158,7 @@ function startGame(fromNetwork = false) {
     const nicknameInput = document.getElementById('player-nickname');
     if (nicknameInput) net.myName = (nicknameInput.value || 'Chris Redfield').trim();
     if (state.status === 'PAUSED') {
+        sound.startAmbient();sound.playUiConfirm();
         state.status = 'PLAYING'; dom.modal.classList.add('hidden'); requestPointerLockSafely(); return;
     }
 
@@ -1150,6 +1184,7 @@ function startGame(fromNetwork = false) {
     shockwaves.forEach(sw => {scene.remove(sw.mesh);disposeVisualObject(sw.mesh);});shockwaves=[];
     explosionFX.forEach(fx=>{scene.remove(fx.group);fx.shells.forEach(p=>{p.mesh.geometry.dispose();p.mat.dispose();});});explosionFX=[];
 
+    sound.startAmbient();sound.playUiConfirm();
     state.status = 'PLAYING'; state.score = 0; state.wave = 1; state.kills = 0; state.combo = 1; state.grenades = 3;
     state.maxHealth = CONFIG.maxHealth; state.health = CONFIG.maxHealth; state.stamina = CONFIG.maxStamina; state.isDowned = false;
     state.invulnTimer = 0; state.meleeCooldown = 0; state.dashCooldown = 0;
@@ -1176,6 +1211,7 @@ function startGame(fromNetwork = false) {
 
 function pauseGame() {
     if (state.status !== 'PLAYING') return;
+    sound.suspendGameAudio();sound.playUiClick();
     state.status = 'PAUSED'; mouse.isDown = false;
     if (document.pointerLockElement) document.exitPointerLock();
     dom.modalTitle.innerHTML = 'MISSÃO <span class="text-amber-400">PAUSADA</span>';
@@ -1190,6 +1226,7 @@ function triggerGameOver(fromNetwork = false) {
     if (state.bossSpawnTimerId) { clearTimeout(state.bossSpawnTimerId); state.bossSpawnTimerId = null; }
     if (state.nextWaveTimerId) { clearTimeout(state.nextWaveTimerId); state.nextWaveTimerId = null; }
     if (dom.meleePrompt) dom.meleePrompt.classList.add('hidden');
+    sound.suspendGameAudio();sound.playSample('death_player',1);
     state.status = 'GAMEOVER'; mouse.isDown = false;
     if (document.pointerLockElement) document.exitPointerLock();
     dom.shopModal.classList.add('hidden');
@@ -1205,6 +1242,7 @@ function requestPointerLockSafely() {
 }
 
 function toggleFlashlight() {
+    sound.playSample('flashlight',.58);
     state.flashlightOn = !state.flashlightOn;
     playerFlashlight.intensity = state.flashlightOn ? 2.4 : 0;
     if (flashlightBeam) flashlightBeam.visible = (state.flashlightOn && currentGraphicsPreset().bloom);
@@ -1312,6 +1350,11 @@ function setupEventListeners() {
     if (btnGfx) btnGfx.addEventListener('click', toggleGraphicsQuality);
     if (dom.btnReloadHud) dom.btnReloadHud.addEventListener('click', reloadWeapon);
     if (dom.btnSound) dom.btnSound.addEventListener('click', toggleSoundUI);
+    const audioVolume = document.getElementById('audio-volume');
+    if (audioVolume) {
+        audioVolume.value = Math.round(sound.volume * 100);
+        audioVolume.addEventListener('input', e => sound.setVolume(Number(e.target.value)/100));
+    }
     const btnPingAlly = document.getElementById('btn-ping-ally');
     if (btnPingAlly) btnPingAlly.addEventListener('click', sendTacticalPing);
 
@@ -1359,6 +1402,7 @@ function setupEventListeners() {
 }
 
 function toggleSoundUI() {
+    sound.init();
     const isOn = sound.toggle();
     dom.iconSoundOn.classList.toggle('hidden', !isOn);
     dom.iconSoundOff.classList.toggle('hidden', isOn);
@@ -1418,7 +1462,7 @@ function setupMobileTouchControls() {
     if (btnMelee) btnMelee.addEventListener('touchstart', (e) => { e.preventDefault(); performMeleeAttack(); });
     btnJump.addEventListener('touchstart', (e) => {
         e.preventDefault();
-        if (state.isGrounded && !state.isDowned) { state.velocityY = CONFIG.jumpForce; state.isGrounded = false; }
+        if (state.isGrounded && !state.isDowned) { state.velocityY = CONFIG.jumpForce; state.isGrounded = false; sound.playSample('jump', .47); }
     });
 }
 
@@ -1432,6 +1476,7 @@ function animate() {
         if (state.status === 'PLAYING') updatePlayer(dt);
         if (state.status === 'PLAYING' || (net.connected && !net.botActive)) {
             updateZombies(dt, elapsedTime);
+            if (state.status === 'PLAYING') sound.updateZombieSounds(dt,zombies,camera);
         }
         updateEffectsAndCrates(dt, elapsedTime);
         updateNetworkSync(elapsedTime, dt);

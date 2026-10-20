@@ -380,16 +380,29 @@ function handleNetMessage(msg) {
         net.ally.x = msg.x; net.ally.y = msg.y; net.ally.z = msg.z;
         net.ally.yaw = msg.yaw; net.ally.pitch = msg.pitch;
         net.ally.hp = msg.hp; net.ally.maxHp = msg.maxHp; net.ally.isDowned = msg.isDowned;
+        if (['PISTOL','RIFLE','SHOTGUN','RAILGUN'].includes(msg.weaponId)) net.ally.weaponId = msg.weaponId;
         updateCoopHUD();
     } else if (msg.type === 'SHOOT_FX' && net.connected) {
         if (net.ally.active) {
-            sound.playShoot(msg.weaponId);
+            sound.playShoot(msg.weaponId, .4);
+            net.ally.weaponId = ['PISTOL','RIFLE','SHOTGUN','RAILGUN'].includes(msg.weaponId) ? msg.weaponId : 'RIFLE';
+            const rig = net.ally.meshGroup && net.ally.meshGroup.userData.rig;
+            if (rig) rig.shotTime = .18;
             if ([msg.sx,msg.sy,msg.sz,msg.ex,msg.ey,msg.ez].every(Number.isFinite)) {
                 createBulletTracer(new THREE.Vector3(msg.sx, msg.sy, msg.sz),
                     new THREE.Vector3(msg.ex, msg.ey, msg.ez), shotStyle(msg.weaponId).color, msg.weaponId);
                 activateAllyMuzzle(msg.weaponId);
             }
         }
+    } else if (msg.type === 'RELOAD_FX' && net.connected && net.ally.active) {
+        if (!['PISTOL','RIFLE','SHOTGUN','RAILGUN'].includes(msg.weaponId)) return;
+        net.ally.weaponId = msg.weaponId;
+        const rig = net.ally.meshGroup && net.ally.meshGroup.userData.rig;
+        if (rig) {
+            rig.reloadDuration = Number.isFinite(msg.duration) ? Math.max(.3,Math.min(4,msg.duration)) : 1.5;
+            rig.reloadRemaining = rig.reloadDuration;
+        }
+        sound.playReloadStage(msg.weaponId,'mag');
     } else if (msg.type === 'WORLD_SNAPSHOT' && net.mode === 'CLIENT' && net.connected && Array.isArray(msg.zombies)) {
         if (state.wave !== msg.wave) {
             state.wave = msg.wave;
@@ -562,7 +575,8 @@ function updateNetworkSync(elapsedTime, dt = 0.016) {
         net.lastSyncSent = elapsedTime;
         sendNetMessage({
             type: 'PLAYER_STATE', name: net.myName, x: camera.position.x, y: camera.position.y, z: camera.position.z,
-            yaw: state.yaw, pitch: state.pitch, hp: state.health, maxHp: state.maxHealth, isDowned: state.isDowned
+            yaw: state.yaw, pitch: state.pitch, hp: state.health, maxHp: state.maxHealth,
+            isDowned: state.isDowned, weaponId: WEAPONS[state.currentWeaponIdx].id
         });
         if (net.mode === 'HOST') {
             const zData = zombies.map(z => ({

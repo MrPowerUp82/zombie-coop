@@ -4,10 +4,10 @@
 [![Three.js](https://img.shields.io/badge/Three.js-r128-black?logo=three.js)](https://threejs.org/)
 [![JavaScript](https://img.shields.io/badge/JavaScript-Vanilla%20ES6+-yellow?logo=javascript)](https://developer.mozilla.org/pt-BR/docs/Web/JavaScript)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-CSS%20CDN-38bdf8?logo=tailwindcss)](https://tailwindcss.com/)
-[![Tests](https://img.shields.io/badge/Tests-37%2F37%20Passing-success?logo=node.js)](tests/multiplayer.test.mjs)
+[![Tests](https://img.shields.io/badge/Tests-51%2F51%20Passing-success?logo=node.js)](tests/multiplayer.test.mjs)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> **Jogo de sobrevivência e ação em primeira pessoa (FPS) 3D** inspirado no modo *The Mercenaries* de **Resident Evil 5**. Desenvolvido em Three.js puro e Web Audio API procedural, sem necessidade de download de assets externos, pronto para jogar direto no navegador ou no **GitHub Pages**!
+> **Jogo de sobrevivência e ação em primeira pessoa (FPS) 3D** inspirado no modo *The Mercenaries* de **Resident Evil 5**. Desenvolvido em Three.js puro e Web Audio API, com armas 3D procedurais e sons originais inclusos, pronto para jogar direto no navegador ou no **GitHub Pages**!
 
 ---
 
@@ -20,6 +20,38 @@ O jogo está configurado com caminhos relativos e pronto para execução direta 
 *(Caso você tenha feito um fork, ative o GitHub Pages em **Settings > Pages > Build and deployment > Branch: `main` / `/ (root)`**)*.
 
 ---
+
+## 🔊 Atualização de áudio: armas, inimigos, passos e ambiente
+
+- **Escopeta:** o disparo `shotgun_fire.wav` foi preservado byte a byte da versão anterior.
+- **Pistola, AK-74 e sniper:** novos efeitos originais em camadas (estalo, impacto grave, mecanismo e reverberação curta). Também foram refeitas as recargas.
+- **Sons que faltavam:** 4 passos variáveis em terra, salto, aterrissagem, 4 gemidos de zumbis, ataques e mortes, impactos em corpo/metal, granada, torreta, explosão, curas, pickups, dano, interface, ondas, lanterna e fundo industrial discreto.
+- **Otimização:** os 47 arquivos WAV PCM são pré-baixados e decodificados pelo navegador; cada reprodução reutiliza o buffer. A mixagem limita impactos consecutivos, reduz sons distantes de zumbis e controla volume separado por categoria, sem alterar a rede ou física.
+- **Volume:** controle SOM no HUD para ajustar o volume geral; **M** liga/desliga (preferência de volume salva no navegador).
+- **Teste isolado:** abra **`OUVIR_SONS.html`** (pode abrir direto) para ouvir os efeitos individualmente, sem iniciar uma partida.
+
+> Os WAV são **sintetizados especificamente para o jogo** (não são gravações reais de armas ou vozes). Não foi possível baixar e integrar os pacotes externos nesta execução. O gerador `tools/generate_audio_v2.py` usa NumPy e SciPy somente para recriar os arquivos; a execução do jogo não precisa de Python nem de dependências npm. Não execute o gerador antigo `generate_weapon_sfx.py` para esta versão, pois ele sobrescreve as melhorias.
+
+**Execute o jogo via `INICIAR_MULTIPLAYER.bat`** (Node.js instalado), acessando `http://localhost:8080`. A prévia `OUVIR_SONS.html` funciona diretamente. Abrir `index.html` por `file://` pode bloquear o carregamento dos WAV; nesse caso não há garantia de áudio.
+
+## 🔫 Armas articuladas e animações
+
+Esta edição **contém tudo que é necessário para as novas armas e efeitos**, sem exigir o download manual de arquivos externos:
+
+- **M93R:** ferrolho desloca-se a cada disparo; carregador se afasta e retorna na recarga; mão esquerda acompanha a troca.
+- **AK-74:** carregador destacável, ferrolho animado, recuo contínuo, coronha, handguard, trilhos e proteção da mão.
+- **M3 Shotgun:** três inserções visuais de cartucho na recarga (a munição continua sendo contabilizada no fim, como na jogabilidade anterior), pump móvel e recuo mais forte.
+- **PSG-1 Laser Sniper:** carregador e bolt móveis, tubo óptico, visualizador de energia e brilho que aumenta durante o tiro.
+- **Mãos na primeira pessoa:** mangas, luvas e dedos estilizados; balanço, recuo e rotação sincronizados com mira, locomoção e recarga.
+- **Áudio:** os disparos, recargas e sons do mundo usam a biblioteca de 47 WAV originais descrita acima. A escopeta mantém seu disparo anterior.
+- **Cooperativo:** o parceiro vê uma silhueta diferente para cada arma, tem animação visível de disparo/recarga e ouve o tiro remoto a volume reduzido. Eventos `RELOAD_FX` e `PLAYER_STATE.weaponId` são compatíveis com as mensagens existentes.
+- **Otimização:** efeitos procedurais manipulam apenas transforms de meshes existentes em cada frame, sem criar novos objetos ao disparar ou recarregar.
+
+**Observação sobre os pacotes pesquisados:** não foram incluídos os downloads de terceiros Quaternius/Kenney/OpenGameArt nesta edição. O pacote usa **modelos detalhados construídos no projeto e sons sintetizados especificamente para ele**, em vez de gravações reais ou modelos importados. O pack Quaternius Ultimate Guns publicado lista formatos FBX, OBJ e Blend (não GLB nativo), exigindo conversão/preparação das peças móveis antes de uma futura substituição pelos modelos licenciados CC0.
+
+**Executar pelo servidor local:** extraia e execute `INICIAR_MULTIPLAYER.bat` (Windows e Node.js instalado); abra `http://localhost:8080`. O `server.js` entrega os arquivos WAV com o MIME correto.
+
+Para regenerar os efeitos novos, use `python tools/generate_audio_v2.py` com NumPy/SciPy. **Não precisa de Python ou npm para jogar.** O `shotgun_fire.wav` está preservado e não é regravado pelo novo gerador.
 
 ## ✨ Atualização visual: versão cinematográfica
 
@@ -186,7 +218,7 @@ zombie-coop-main/
 │   └── style.css           # Estilos, overlays e animações CSS
 ├── js/
 │   ├── config.js           # Constantes, estado e DOM
-│   ├── audio.js            # Áudio procedural
+│   ├── audio.js            # Mixagem e biblioteca WAV
 │   ├── network.js          # WebRTC, WebSocket, abas locais e bot
 │   ├── entities.js         # Objetos 3D e zumbis
 │   ├── visuals.js          # Efeitos de pós-processamento
@@ -215,7 +247,7 @@ node --test tests/*.test.mjs
 ### Cenários cobertos (37 testes automatizados):
 - Simetria de movimentação lateral (`A` e `D`)
 - Esquiva direcional (*Dash*) e invulnerabilidade (*i-frames*)
-- Cancelamento de recarga ao trocar de armas
+- Cancelamento de recarga ao trocar de armas, inclusive da animação e sons sincronizados
 - Pausa de zumbis e do bot ao abrir a Loja B.S.A.A.
 - Hitboxes anatômicas segmentadas (`HEAD`, `BODY`, `LEG`)
 - Geração segura de zumbis fora de obstáculos

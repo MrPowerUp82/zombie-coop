@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zombie Co-op — Prévia dos efeitos sonoros</title>
+<style>
+:root{color-scheme:dark}body{font:15px system-ui,sans-serif;background:#0e141b;color:#f0f3f5;margin:0 auto;max-width:1000px;padding:28px 18px}h1{color:#fbbf24}h2{margin-top:26px;color:#d0d6dd;font-size:1.2em}.hint{color:#a3b0c0;line-height:1.6}.panel{background:#18212c;border:1px solid #3b4653;padding:14px;border-radius:12px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;position:sticky;top:8px;z-index:2}button{background:#233141;color:#fff;border:1px solid #506177;border-radius:10px;padding:12px 14px;cursor:pointer;text-align:left}button:hover,button:focus{background:#445872;outline:2px solid #eab308}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:9px}audio{display:none}small{color:#a9b8ca}input{accent-color:#fbbf24}#current{color:#fdce67;font-weight:700}</style>
+</head>
+<body>
+<h1>🧟 Zombie Co-op — Laboratório de sons</h1>
+<p class="hint">Clique em um efeito para ouvir. Os arquivos ficam no próprio projeto e funcionam até quando esta página é aberta diretamente (sem servidor). O disparo da 12 é o mesmo da versão anterior.</p>
+<div class="panel"><button id="stop">■ Parar</button><span id="current" aria-live="polite">Nenhum som tocando</span><label>Volume <input id="volume" type="range" min="0" max="100" value="65" aria-label="Volume de prévia"></label></div>
+<div id="groups"></div>
+<audio id="preview" preload="none"></audio>
+<script>
+const groups={
+'🔫 Disparos e mecânica':{'M93R — Disparo':'pistol_fire','AK-74 — Disparo':'rifle_fire','12 — Disparo original':'shotgun_fire','PSG-1 — Laser':'railgun_fire','Pistola — Recarga':'pistol_reload','Fuzil — Recarga':'rifle_reload','Escopeta — Bomba':'shotgun_pump','Escopeta — Cartucho':'shotgun_shell','Sniper — Recarga':'railgun_reload','Ferrolho':'weapon_bolt','Arma sem munição':'weapon_empty','Torreta':'turret_fire'},
+'👣 Movimentação':{'Passo 1':'footstep_1','Passo 2':'footstep_2','Passo 3':'footstep_3','Passo 4':'footstep_4','Salto':'jump','Aterrissagem':'land'},
+'🧟 Inimigos':{'Zumbi 1':'zombie_groan_1','Zumbi 2':'zombie_groan_2','Zumbi 3':'zombie_groan_3','Brutamonte':'zombie_groan_4','Ataque':'zombie_attack','Morte':'zombie_die'},
+'💥 Combate e colisões':{'Impacto corpo':'impact_body','Headshot':'impact_head','Impacto metal':'impact_metal','Golpe':'melee_swing','Golpe — Acerto':'melee_hit','Jogador ferido':'damage_player','Morte do jogador':'death_player','Granada lançada':'grenade_throw','Granada quica':'grenade_bounce','Explosão':'explosion'},
+'📡 Itens e interface':{'Coleta':'pickup','Cura':'heal','Clique':'ui_click','Confirmar':'ui_confirm','Erro':'ui_deny','Ping':'ping','Nova onda':'wave_start','Onda vencida':'wave_clear','Alerta de chefe':'boss_alarm','Torreta posicionada':'sentry_deploy','Lanterna':'flashlight'},
+'🌫️ Ambiente':{'Ambiente industrial — 8 segundos':'ambient_industrial'}
+};
+const audio=document.getElementById('preview'), label=document.getElementById('current');
+for(const [group,items] of Object.entries(groups)){
+ const h=document.createElement('h2');h.textContent=group;document.getElementById('groups').append(h);
+ const container=document.createElement('div');container.className='grid';document.getElementById('groups').append(container);
+ for(const [name,file] of Object.entries(items)){
+  const button=document.createElement('button');button.textContent='▶ '+name;
+  button.addEventListener('click',()=>{ audio.pause();audio.src='assets/audio/'+file+'.wav'; audio.currentTime=0; audio.play().then(()=>{label.textContent=name;}).catch(()=>{label.textContent='Não foi possível tocar '+name;}); });container.append(button);
+ }
+}
+document.getElementById('volume').addEventListener('input',e=>audio.volume=Number(e.target.value)/100);audio.volume=.65;
+document.getElementById('stop').addEventListener('click',()=>{audio.pause();audio.currentTime=0;label.textContent='Parado';});
+audio.addEventListener('ended',()=>label.textContent='Pronto para ouvir outro efeito');
+</script>
+</body>
+</html>

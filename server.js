@@ -10,7 +10,7 @@ const { URL } = require('node:url');
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST || '0.0.0.0';
 const ROOT = __dirname;
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.glb': 'model/gltf-binary', '.woff': 'font/woff', '.woff2': 'font/woff2' };
 const MAX_FRAME = 256 * 1024;
 const ROOM_RE = /^RE5[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{5}$/;
 const rooms = new Map();

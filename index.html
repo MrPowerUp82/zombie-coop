@@ -108,6 +108,9 @@
                         <option value="ALTO">ALTO</option>
                         <option value="ULTRA">ULTRA</option>
                     </select>
+                    <label class="flex items-center gap-1 text-[9px] text-amber-200/85 font-bold" title="Volume geral">
+                        SOM <input id="audio-volume" type="range" min="0" max="100" value="100" step="5" aria-label="Volume de áudio" class="interactive w-[76px] accent-amber-500 cursor-pointer" />
+                    </label>
                     <div class="flex gap-1.5">
                         <button id="btn-sound" class="interactive hud-panel p-2.5 rounded-xl hover:bg-slate-800/90 active:scale-95 transition text-slate-200 border border-amber-700/50" title="Som (M)">
                             <svg id="icon-sound-on" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
@@ -449,6 +452,7 @@
     <script src="js/audio.js"></script>
     <script src="js/network.js"></script>
     <script src="js/entities.js"></script>
+    <script src="js/weapon-animations.js"></script>
     <script src="js/shots.js"></script>
     <script src="js/visuals.js"></script>
     <script src="js/main.js"></script>

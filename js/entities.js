@@ -437,6 +437,9 @@ function buildFirstPersonWeapons() {
         const flashHider = new THREE.Mesh(new THREE.CylinderGeometry(0.044,0.044,0.08,18),chromeMat);
         flashHider.rotation.x=Math.PI/2; flashHider.position.set(0,0.01,-len-0.23); model.add(flashHider);
     }
+    if (typeof enhanceFirstPersonWeapons === 'function') {
+        enhanceFirstPersonWeapons({ pistolSlide:pSlide, rifleMag:rMag, shotgunPump:sPump });
+    }
     muzzleFlash = createMuzzleFlashVisual();
     muzzleFlash.position.set(0,0.03,-0.75);
     gunGroup.add(muzzleFlash);
@@ -553,11 +556,35 @@ function buildCoopAllyAvatar() {
     allyGun.position.set(0.27,1.25,-0.50);group.add(allyGun);
     const gunBarrel=new THREE.Mesh(new THREE.CylinderGeometry(0.026,0.026,0.45,16),metal);
     gunBarrel.rotation.x=Math.PI/2;gunBarrel.position.set(0.27,1.26,-0.98);group.add(gunBarrel);
+    // Silhuetas próprias para as quatro armas do parceiro (sem alterar hitboxes).
+    const rifleWorld = new THREE.Group();
+    group.remove(allyGun); group.remove(gunBarrel);
+    rifleWorld.add(allyGun); rifleWorld.add(gunBarrel); group.add(rifleWorld);
+    function allyWeaponVariant(length, thick, color, mag = true) {
+        const variant = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.BoxGeometry(thick,.12,length*.68),color);
+        body.position.set(.27,1.25,-.48); variant.add(body);
+        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(thick*.15,thick*.15,length*.55,12),metal);
+        barrel.position.set(.27,1.26,-.48-length*.49); barrel.rotation.x=Math.PI/2; variant.add(barrel);
+        if (mag) {
+            const clip = new THREE.Mesh(new THREE.BoxGeometry(thick*.5,.18,.09),metal);
+            clip.position.set(.27,1.12,-.44);variant.add(clip);
+        }
+        group.add(variant);variant.visible=false;
+        return variant;
+    }
+    const allyWeapons = {
+        RIFLE:rifleWorld,
+        PISTOL:allyWeaponVariant(.48,.105,metal,true),
+        SHOTGUN:allyWeaponVariant(.92,.16,metal,false),
+        RAILGUN:allyWeaponVariant(1.17,.14,visorMat,true)
+    };
     const allyMuzzle = createMuzzleFlashVisual();
     allyMuzzle.position.set(0.27,1.26,-1.24);
     group.add(allyMuzzle);
     const allyBeacon=new THREE.PointLight(0x9dd9ee,0.5,7);allyBeacon.position.set(0,2.2,0);group.add(allyBeacon);
-    group.userData.rig={legs,arms,torso,head,lastX:0,lastZ:0,phase:0};
+    group.userData.rig={legs,arms,torso,head,lastX:0,lastZ:0,phase:0,
+        allyWeapons,weaponId:'RIFLE',shotTime:0,reloadRemaining:0,reloadDuration:1};
     group.visible=false;scene.add(group);
     net.ally.meshGroup=group;net.ally.muzzleFlash=allyMuzzle;
 }
@@ -577,6 +604,20 @@ function animateCoopAlly(dt, elapsedTime) {
     rig.arms[1].rotation.x=THREE.MathUtils.lerp(rig.arms[1].rotation.x,sway*0.25-0.15,dt*9);
     rig.torso.rotation.z=Math.sin(elapsedTime*1.4)*0.025+sway*0.025;
     rig.head.rotation.y=Math.sin(elapsedTime*0.8)*0.07;
+    const current = net.ally.weaponId || 'RIFLE';
+    if (rig.weaponId !== current) {
+        rig.weaponId = current;
+        for (const [name,weapon] of Object.entries(rig.allyWeapons)) weapon.visible = name === current;
+        const muzzleDepth = {PISTOL:-.89,RIFLE:-1.24,SHOTGUN:-1.19,RAILGUN:-1.43};
+        if (net.ally.muzzleFlash) net.ally.muzzleFlash.position.z = muzzleDepth[current] || -1.24;
+    }
+    rig.shotTime=Math.max(0,rig.shotTime-dt);
+    rig.reloadRemaining=Math.max(0,rig.reloadRemaining-dt);
+    const progress=rig.reloadRemaining && rig.reloadDuration ? 1-rig.reloadRemaining/rig.reloadDuration : 0;
+    const gesture=progress ? Math.sin(Math.PI*progress) : 0;
+    rig.arms[0].rotation.x+=gesture*.57;
+    rig.arms[1].rotation.x+=gesture*.31;
+    rig.torso.rotation.x=rig.shotTime*.22+gesture*.065;
 }
 
 // Protótipos: toda geometria do mesmo tipo é compartilhada na GPU.
