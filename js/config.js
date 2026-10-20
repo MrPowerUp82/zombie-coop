@@ -71,11 +71,15 @@ const net = {
     mode: 'SOLO',
     transport: null,
     bc: null,
+    peer: null, conn: null, ws: null, wsReady: false,
+    generation: 0, joinTimeout: null, localElectionTimer: null,
+    instanceId: Math.random().toString(36).slice(2) + Date.now().toString(36),
     roomCode: '',
     connected: false,
     botActive: false,
     myName: 'Chris Redfield',
     lastSyncSent: 0,
+    matchId: 0,
     ally: {
         active: false, name: 'Sheva Alomar', x: 3, y: 0, z: 0, yaw: 0, pitch: 0, hp: 120, maxHp: 120, isDowned: false, weaponIdx: 1, flashlightOn: true,
         meshGroup: null, flashlight: null, muzzleFlash: null, botFireCooldown: 0, botTargetX: 3, botTargetZ: 0
@@ -90,7 +94,7 @@ let scene, camera, renderer, clock;
 let gunGroup, weaponModels = [], muzzleFlash, muzzleLight, playerFlashlight, playerFlashlightTarget, flashlightBeam;
 let obstacles = [], zombies = [], particles = [], bulletTracers = [], supplyCrates = [], dyingZombies = [], lootDrops = [];
 let explosiveBarrels = [], activeGrenades = [], activeTurrets = [], shellCasings = [], groundDecals = [], shockwaves = [];
-let ambientDust = null, procTextures = {}, gfxQuality = 'ULTRA';
+let ambientDust = null, procTextures = {}, gfxQuality = 'ULTRA', explosionFX = [];
 const raycaster = new THREE.Raycaster();
 
 const dom = {

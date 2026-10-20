@@ -1,82 +1,293 @@
 // ==========================================
-// REDE & CO-OP P2P (BROADCASTCHANNEL & LOCALSTORAGE)
-// Suporte a Multiplayer P2P, Abas Locais e IA da Sheva Alomar
+// REDE COOPERATIVA (WEBRTC / WEBSOCKET / ABAS LOCAIS)
+// Multiplayer online real com salas para 2 jogadores e IA da Sheva Alomar
 // ==========================================
+
+// Salas online: WebRTC (PeerJS / sinalização pública). O WebSocket próprio é
+// usado quando o jogo é servido pelo server.js ou há uma URL configurada.
+const COOP_PEER_PREFIX = 'zombie-coop-v3-';
+const COOP_JOIN_TIMEOUT = 14000;
 
 function generateRoomCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let code = 'RE5';
-    for (let i = 0; i < 4; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
-    return code;
+    const bytes = new Uint8Array(5);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
+    else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    return 'RE5' + Array.from(bytes, n => chars[n % chars.length]).join('');
+}
+
+function clearNetworkTimeout() {
+    if (net.joinTimeout) clearTimeout(net.joinTimeout);
+    net.joinTimeout = null;
+}
+
+function resetNetworkSession() {
+    net.generation = (net.generation || 0) + 1;
+    clearNetworkTimeout();
+    if (net.localElectionTimer) clearTimeout(net.localElectionTimer);
+    net.localElectionTimer = null;
+    if (net.bc) { try { net.bc.close(); } catch (e) {} }
+    if (net.conn) { try { net.conn.close(); } catch (e) {} }
+    if (net.peer) { try { net.peer.destroy(); } catch (e) {} }
+    if (net.ws) { try { net.ws.close(); } catch (e) {} }
+    net.bc = null; net.peer = null; net.conn = null; net.ws = null;
+    net.wsReady = false; net.connected = false; net.botActive = false;
+    net.ally.active = false; net.roomCode = ''; net.mode = 'SOLO'; net.transport = null;
+    net.lastSyncSent = 0; net.matchId = 0;
+    if (net.ally.meshGroup) net.ally.meshGroup.visible = false;
+    const codeBox = document.getElementById('host-code-box');
+    if (codeBox) codeBox.classList.add('hidden');
+    const botBtn = document.getElementById('btn-coop-bot');
+    if (botBtn) botBtn.textContent = '👩‍✈️ Ativar Sheva (IA Co-op)';
+    updateCoopHUD();
+    return net.generation;
+}
+
+function networkFailure(message, generation = net.generation) {
+    if (generation !== net.generation) return;
+    clearNetworkTimeout();
+    // Preserva a sala HOST que já está aberta se somente um candidato falhar.
+    if (net.connected || (net.mode === 'HOST' && net.transport === 'PEER' && net.peer && net.peer.open)) return;
+    setP2PStatus('❌ ' + message, 'text-red-400');
+    updateCoopHUD();
+}
+
+function beginJoinTimeout(generation) {
+    clearNetworkTimeout();
+    net.joinTimeout = setTimeout(() => {
+        if (net.generation === generation && !net.connected) {
+            setP2PStatus('❌ Tempo esgotado. Confira o código, internet e firewall.', 'text-red-400');
+            if (net.conn) { try { net.conn.close(); } catch (e) {} }
+        }
+    }, COOP_JOIN_TIMEOUT);
+}
+
+function showHostReady(code) {
+    document.getElementById('host-code-box').classList.remove('hidden');
+    document.getElementById('host-room-code').textContent = code;
+    setP2PStatus(`✅ Sala ${code} pronta. Compartilhe o código e aguarde.`, 'text-emerald-400');
+    sound.playPing();
+    updateCoopHUD();
+}
+
+function markNetworkDisconnected(reason) {
+    net.connected = false;
+    net.ally.active = false;
+    if (net.ally.meshGroup) net.ally.meshGroup.visible = false;
+    setP2PStatus('⚠️ ' + reason, 'text-amber-400');
+    updateCoopHUD();
+}
+
+function onRemotePeerOpen(conn, generation) {
+    conn.on('data', (msg) => {
+        if (net.generation === generation && net.conn === conn) handleNetMessage(msg);
+    });
+    conn.on('close', () => {
+        if (net.generation !== generation || net.conn !== conn) return;
+        net.conn = null;
+        markNetworkDisconnected(net.mode === 'HOST' ? 'Parceiro saiu. Sala continua aberta.' : 'Conexão com o host encerrada.');
+    });
+    conn.on('error', () => {
+        if (net.generation !== generation) return;
+        if (net.connected) markNetworkDisconnected('Falha de conexão WebRTC.');
+        else networkFailure('Falha de conexão WebRTC.', generation);
+    });
+    conn.on('open', () => {
+        if (net.generation !== generation || net.conn !== conn) return;
+        if (net.mode === 'CLIENT') {
+            setP2PStatus('Conexão estabelecida. Confirmando entrada...', 'text-sky-400');
+            sendNetMessage({ type: 'ROOM_JOIN_REQUEST', name: net.myName, room: net.roomCode });
+        }
+    });
+}
+
+function startPeerRoom(role, code, generation) {
+    if (typeof Peer !== 'function') {
+        networkFailure('A biblioteca PeerJS não carregou. Verifique a internet ou use o servidor local.', generation);
+        return;
+    }
+    let peer;
+    try { peer = role === 'HOST' ? new Peer(COOP_PEER_PREFIX + code.toLowerCase()) : new Peer(); }
+    catch (error) { networkFailure('Não foi possível inicializar WebRTC. Use o servidor local.', generation); return; }
+    net.peer = peer;
+    peer.on('open', () => {
+        if (net.generation !== generation) return;
+        if (role === 'HOST') {
+            showHostReady(code);
+        } else {
+            setP2PStatus('Procurando a sala e negociando conexão WebRTC...', 'text-sky-400');
+            const conn = peer.connect(COOP_PEER_PREFIX + code.toLowerCase(), { reliable: true, serialization: 'json' });
+            net.conn = conn;
+            onRemotePeerOpen(conn, generation);
+            beginJoinTimeout(generation);
+        }
+    });
+    peer.on('connection', (conn) => {
+        if (net.generation !== generation || net.mode !== 'HOST') { conn.close(); return; }
+        if (net.conn && net.conn.open) {
+            conn.on('open', () => { conn.send({ type: 'ROOM_FULL' }); conn.close(); });
+            return;
+        }
+        net.conn = conn;
+        onRemotePeerOpen(conn, generation);
+    });
+    peer.on('error', (err) => {
+        if (net.generation !== generation) return;
+        const code = err && err.type;
+        const message = code === 'unavailable-id' ? 'Esse código já está em uso. Crie outra sala.'
+            : code === 'peer-unavailable' ? 'Sala não encontrada. Confira o código do host.'
+            : code === 'network' || code === 'server-error' || code === 'socket-error' ? 'Servidor de conexão indisponível. Tente o servidor local.'
+            : 'Erro na conexão online' + (code ? ` (${code})` : '.');
+        if (net.connected) markNetworkDisconnected(message);
+        else networkFailure(message, generation);
+    });
+    peer.on('disconnected', () => {
+        if (net.generation !== generation) return;
+        if (!net.connected) networkFailure('Sem conexão com o servidor de sinalização.', generation);
+        // Canal WebRTC pode permanecer ativo mesmo se o serviço de sinalização cair.
+    });
+    if (role === 'CLIENT') beginJoinTimeout(generation);
+}
+
+function getCoopServerURL() {
+    const input = document.getElementById('coop-server-url');
+    const custom = input && input.value.trim();
+    if (custom) {
+        try {
+            const url = new URL(custom);
+            if ((url.protocol === 'ws:' || url.protocol === 'wss:') && url.hostname) {
+                return url.origin + '/ws';
+            }
+        } catch (e) {}
+        return null;
+    }
+    // Nosso servidor integrado anuncia a disponibilidade na própria página.
+    if (typeof window !== 'undefined' && window.COOP_LOCAL_SERVER === true && typeof location !== 'undefined') {
+        return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
+    }
+    return '';
+}
+
+function startSocketRoom(role, code, generation, url) {
+    if (typeof WebSocket === 'undefined') {
+        networkFailure('WebSocket indisponível neste navegador.', generation);
+        return;
+    }
+    try {
+        const ws = new WebSocket(url);
+        net.ws = ws;
+        ws.addEventListener('open', () => {
+            if (net.generation !== generation) return;
+            ws.send(JSON.stringify({ op: role === 'HOST' ? 'create' : 'join', code }));
+        });
+        ws.addEventListener('message', (event) => {
+            if (net.generation !== generation || net.ws !== ws) return;
+            let packet;
+            try { packet = JSON.parse(event.data); } catch (e) { return; }
+            if (packet.op === 'created') { net.wsReady = true; showHostReady(code); }
+            else if (packet.op === 'joined') {
+                net.wsReady = true;
+                setP2PStatus('Conectado ao servidor. Confirmando parceiro...', 'text-sky-400');
+                sendNetMessage({ type: 'ROOM_JOIN_REQUEST', name: net.myName, room: code });
+            } else if (packet.op === 'peer_joined') {
+                setP2PStatus('Parceiro encontrado. Conectando...', 'text-sky-400');
+            } else if (packet.op === 'peer_left') {
+                markNetworkDisconnected('Parceiro desconectou.');
+            } else if (packet.op === 'packet') handleNetMessage(packet.data);
+            else if (packet.op === 'error') networkFailure(packet.message || 'Erro no servidor.', generation);
+        });
+        ws.addEventListener('close', () => {
+            if (net.generation === generation && net.ws === ws) markNetworkDisconnected('Servidor desconectado.');
+        });
+        ws.addEventListener('error', () => {
+            if (net.generation === generation) networkFailure('Não foi possível acessar o servidor. Verifique a URL e porta.', generation);
+        });
+        if (role === 'CLIENT') beginJoinTimeout(generation);
+    } catch (e) {
+        networkFailure('URL do servidor inválida ou conexão bloqueada.', generation);
+    }
+}
+
+function initHostP2P() {
+    sound.init();
+    const serverInput = document.getElementById('coop-server-url');
+    const serverURL = getCoopServerURL();
+    if (serverInput && serverInput.value.trim() && !serverURL) {
+        setP2PStatus('❌ Use uma URL ws:// ou wss:// válida.', 'text-red-400'); return;
+    }
+    const generation = resetNetworkSession();
+    net.myName = (document.getElementById('player-nickname').value || 'Chris Redfield').trim();
+    const code = generateRoomCode();
+    net.roomCode = code; net.mode = 'HOST';
+    net.transport = serverURL ? 'SOCKET' : 'PEER';
+    setP2PStatus('Criando sala online...', 'text-sky-400'); updateCoopHUD();
+    if (serverURL) startSocketRoom('HOST', code, generation, serverURL);
+    else startPeerRoom('HOST', code, generation);
+}
+
+function joinRoomP2P() {
+    sound.init();
+    const rawCode = document.getElementById('join-code-input').value.trim().toUpperCase();
+    if (!/^RE5[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{5}$/.test(rawCode)) {
+        setP2PStatus('❌ Código inválido. Use o código RE5 + 5 caracteres do host.', 'text-red-400'); return;
+    }
+    const serverInput = document.getElementById('coop-server-url');
+    const serverURL = getCoopServerURL();
+    if (serverInput && serverInput.value.trim() && !serverURL) {
+        setP2PStatus('❌ Use uma URL ws:// ou wss:// válida.', 'text-red-400'); return;
+    }
+    const generation = resetNetworkSession();
+    net.myName = (document.getElementById('player-nickname').value || 'Sheva Alomar').trim();
+    net.roomCode = rawCode; net.mode = 'CLIENT'; net.transport = serverURL ? 'SOCKET' : 'PEER';
+    setP2PStatus(`Procurando sala ${rawCode}...`, 'text-sky-400'); updateCoopHUD();
+    if (serverURL) startSocketRoom('CLIENT', rawCode, generation, serverURL);
+    else startPeerRoom('CLIENT', rawCode, generation);
 }
 
 function openRoomChannel(channelName) {
     if (net.bc) { try { net.bc.close(); } catch (e) {} }
     if (typeof BroadcastChannel !== 'undefined') {
         net.bc = new BroadcastChannel(channelName);
-        net.bc.onmessage = (ev) => handleNetMessage(ev.data);
+        net.bc.onmessage = (ev) => {
+            const packet = ev.data;
+            if (packet && packet.sender !== net.instanceId && packet.room === net.roomCode) handleNetMessage(packet.payload);
+        };
     }
 }
 
 window.addEventListener('storage', (ev) => {
-    if (ev.key === 're5_p2p_packet' && ev.newValue) {
-        try {
-            const parsed = JSON.parse(ev.newValue);
-            if (parsed && parsed.room === net.roomCode && parsed.sender !== net.myName) {
-                handleNetMessage(parsed.payload);
-            }
-        } catch (e) {}
-    }
+    if (net.transport !== 'CHANNEL' || net.bc || ev.key !== 're5_p2p_packet' || !ev.newValue) return;
+    try {
+        const parsed = JSON.parse(ev.newValue);
+        if (parsed.room === net.roomCode && parsed.sender !== net.instanceId) handleNetMessage(parsed.payload);
+    } catch (e) {}
 });
 
-async function initHostP2P() {
-    sound.init();
-    net.myName = (document.getElementById('player-nickname').value || 'Chris Redfield').trim();
-    const code = generateRoomCode();
-    net.roomCode = code;
-    net.mode = 'HOST';
-    net.transport = 'CHANNEL';
-    net.botActive = false;
-    openRoomChannel('re5_room_' + code);
-    document.getElementById('host-code-box').classList.remove('hidden');
-    document.getElementById('host-room-code').textContent = code;
-    setP2PStatus(`Sala Kijuju [${code}] aberta!`, 'text-amber-400');
-    sound.playPing();
-    updateCoopHUD();
-}
-
-function joinRoomP2P() {
-    sound.init();
-    net.myName = (document.getElementById('player-nickname').value || 'Sheva Alomar').trim();
-    const rawCode = document.getElementById('join-code-input').value.trim().toUpperCase();
-    if (!rawCode) { setP2PStatus('Digite o código da sala!', 'text-amber-400'); return; }
-    net.roomCode = rawCode;
-    net.mode = 'CLIENT';
-    net.transport = 'CHANNEL';
-    net.botActive = false;
-    openRoomChannel('re5_room_' + rawCode);
-    setP2PStatus(`Entrando na sala [${rawCode}]...`, 'text-sky-400');
-    sendNetMessage({ type: 'ROOM_JOIN_REQUEST', name: net.myName, room: rawCode });
-    updateCoopHUD();
-}
-
+// Compatibilidade opcional para duas abas *da mesma origem*.
 function initLocalTabSync() {
     sound.init();
+    const generation = resetNetworkSession();
     net.myName = (document.getElementById('player-nickname').value || 'Chris Redfield').trim();
-    net.roomCode = 'KIJUJU';
-    net.transport = 'CHANNEL';
-    net.mode = 'HOST';
-    net.botActive = false;
+    net.roomCode = 'KIJUJU'; net.transport = 'CHANNEL'; net.mode = 'CLIENT';
     openRoomChannel('re5_coop_channel');
-    setP2PStatus('Canal Co-op Kijuju Ativo!', 'text-amber-400');
-    sendNetMessage({ type: 'TAB_DISCOVER', name: net.myName, timestamp: Date.now() });
+    setP2PStatus('Buscando outra aba deste mesmo site...', 'text-sky-400');
+    sendNetMessage({ type: 'TAB_DISCOVER', name: net.myName, sessionId: net.instanceId });
+    net.localElectionTimer = setTimeout(() => {
+        if (net.generation === generation && !net.connected && net.mode !== 'HOST') {
+            net.mode = 'HOST';
+            setP2PStatus('Aba anfitriã pronta. Clique em Sincronizar na segunda aba.', 'text-amber-400');
+            updateCoopHUD();
+        }
+    }, 850);
     updateCoopHUD();
 }
 
 function toggleCoopBot() {
     sound.init();
     net.myName = (document.getElementById('player-nickname').value || 'Chris Redfield').trim();
-    net.botActive = !net.botActive;
+    const activatingBot = !net.botActive;
+    if (activatingBot) resetNetworkSession();
+    net.botActive = activatingBot;
     const btnBot = document.getElementById('btn-coop-bot');
     if (net.botActive) {
         net.mode = 'HOST'; net.transport = 'BOT'; net.roomCode = 'SQUAD-AI'; net.connected = true; net.ally.active = true;
@@ -96,45 +307,86 @@ function toggleCoopBot() {
 }
 
 function sendNetMessage(payload) {
-    if (net.bc) { try { net.bc.postMessage(payload); } catch (e) {} }
-    try {
-        localStorage.setItem('re5_p2p_packet', JSON.stringify({
-            room: net.roomCode, sender: net.myName, ts: Date.now() + Math.random(), payload
-        }));
-    } catch (e) {}
+    if (!payload || !payload.type) return;
+    if (net.transport === 'PEER') {
+        if (net.conn && net.conn.open) {
+            try { net.conn.send(payload); } catch (e) {}
+        }
+    } else if (net.transport === 'SOCKET') {
+        if (net.ws && net.ws.readyState === 1 && net.wsReady) {
+            try { net.ws.send(JSON.stringify({ op: 'packet', data: payload })); } catch (e) {}
+        }
+    } else if (net.transport === 'CHANNEL') {
+        const packet = { room: net.roomCode, sender: net.instanceId, payload };
+        if (net.bc) { try { net.bc.postMessage(packet); } catch (e) {} }
+        else { try { localStorage.setItem('re5_p2p_packet', JSON.stringify(packet)); } catch (e) {} }
+    }
 }
 
 function handleNetMessage(msg) {
-    if (!msg || !msg.type) return;
-    if (msg.type === 'TAB_DISCOVER' || msg.type === 'ROOM_JOIN_REQUEST') {
-        net.botActive = false; net.mode = 'HOST'; net.connected = true; net.ally.active = true;
+    if (!msg || typeof msg.type !== 'string') return;
+    if (msg.type === 'ROOM_FULL') {
+        networkFailure('Essa sala já possui dois jogadores.', net.generation);
+        if (net.conn) net.conn.close();
+        return;
+    }
+    if (msg.type === 'TAB_DISCOVER' && net.transport === 'CHANNEL') {
+        if (!msg.sessionId || msg.sessionId === net.instanceId) return;
+        if (net.mode === 'HOST' || (net.mode === 'CLIENT' && net.instanceId < msg.sessionId)) {
+            net.mode = 'HOST';
+            sendNetMessage({ type: 'TAB_WELCOME', name: net.myName, target: msg.sessionId });
+            net.connected = true; net.ally.active = true; net.ally.name = msg.name || 'Parceiro B.S.A.A.';
+            if (net.ally.meshGroup) net.ally.meshGroup.visible = true;
+            updateCoopHUD();
+            if (state.status === 'PLAYING' || state.status === 'SHOP') sendNetMessage({ type: 'START_MATCH', matchId: net.matchId });
+        } else {
+            sendNetMessage({ type: 'ROOM_JOIN_REQUEST', name: net.myName, room: net.roomCode, target: net.instanceId });
+        }
+        return;
+    }
+    if (msg.type === 'ROOM_JOIN_REQUEST' && net.mode === 'HOST') {
+        if (msg.room && msg.room !== net.roomCode) return;
+        if (net.connected && msg.name !== net.ally.name) {
+            sendNetMessage({ type: 'ROOM_FULL' }); return;
+        }
+        net.botActive = false; net.connected = true; net.ally.active = true;
         net.ally.name = msg.name || 'Parceiro B.S.A.A.';
         if (net.ally.meshGroup) net.ally.meshGroup.visible = true;
-        sendNetMessage({ type: 'TAB_WELCOME', name: net.myName });
+        sendNetMessage({ type: 'TAB_WELCOME', name: net.myName, target: msg.target || null });
+        if (state.status === 'PLAYING' || state.status === 'SHOP') sendNetMessage({ type: 'START_MATCH', matchId: net.matchId });
         sound.playPing();
-        setP2PStatus(`Parceiro (${net.ally.name}) conectado!`, 'text-emerald-400');
+        setP2PStatus(`✅ ${net.ally.name} entrou na sala!`, 'text-emerald-400');
         updateCoopHUD();
-    } else if (msg.type === 'TAB_WELCOME') {
-        net.botActive = false; net.mode = 'CLIENT'; net.connected = true; net.ally.active = true;
+    } else if (msg.type === 'TAB_WELCOME' && net.mode === 'CLIENT') {
+        if (msg.target && msg.target !== net.instanceId) return;
+        net.botActive = false; net.connected = true; net.ally.active = true;
         net.ally.name = msg.name || 'Host B.S.A.A.';
         if (net.ally.meshGroup) net.ally.meshGroup.visible = true;
+        clearNetworkTimeout();
         sound.playPing();
-        setP2PStatus(`Conectado ao Host (${net.ally.name})!`, 'text-emerald-400');
+        setP2PStatus(`✅ Conectado ao host (${net.ally.name})!`, 'text-emerald-400');
         updateCoopHUD();
     } else if (msg.type === 'START_MATCH') {
-        if (state.status !== 'PLAYING') startGame(true);
-    } else if (msg.type === 'PLAYER_STATE') {
+        // O host é dono da partida: cada nova rodada tem um identificador.
+        if (net.connected && net.mode === 'CLIENT' && net.matchId !== msg.matchId) {
+            net.matchId = msg.matchId;
+            if (state.status === 'PAUSED') state.status = 'MENU';
+            startGame(true);
+        }
+    } else if (msg.type === 'MATCH_END' && net.connected && net.mode === 'CLIENT') {
+        if (state.status !== 'GAMEOVER') triggerGameOver(true);
+    } else if (msg.type === 'PLAYER_STATE' && net.connected) {
         net.ally.active = true; net.ally.name = msg.name || net.ally.name;
         net.ally.x = msg.x; net.ally.y = msg.y; net.ally.z = msg.z;
         net.ally.yaw = msg.yaw; net.ally.pitch = msg.pitch;
         net.ally.hp = msg.hp; net.ally.maxHp = msg.maxHp; net.ally.isDowned = msg.isDowned;
         updateCoopHUD();
-    } else if (msg.type === 'SHOOT_FX') {
+    } else if (msg.type === 'SHOOT_FX' && net.connected) {
         if (net.ally.active) {
             sound.playShoot(msg.weaponId);
             createBulletTracer(new THREE.Vector3(msg.sx, msg.sy, msg.sz), new THREE.Vector3(msg.ex, msg.ey, msg.ez), 0xf59e0b);
         }
-    } else if (msg.type === 'WORLD_SNAPSHOT' && net.mode === 'CLIENT') {
+    } else if (msg.type === 'WORLD_SNAPSHOT' && net.mode === 'CLIENT' && net.connected && Array.isArray(msg.zombies)) {
         if (state.wave !== msg.wave) {
             state.wave = msg.wave;
             dom.waveBannerText.textContent = `CAPÍTULO ${state.wave} (CO-OP)`;
@@ -144,18 +396,20 @@ function handleNetMessage(msg) {
         state.zombiesToSpawn = msg.zombiesToSpawn;
         syncClientZombies(msg.zombies);
         updateHUD();
-    } else if (msg.type === 'CLIENT_HIT_ZOMBIE' && net.mode === 'HOST') {
+    } else if (msg.type === 'CLIENT_HIT_ZOMBIE' && net.mode === 'HOST' && net.connected) {
         const target = zombies.find(z => z.uid === msg.uid);
-        if (target) damageZombie(target, msg.damage, new THREE.Vector3(msg.hx, msg.hy, msg.hz), msg.isHeadshot, true);
-    } else if (msg.type === 'EXPLODE_BARREL') {
+        if (target && Number.isFinite(msg.damage) && msg.damage > 0) damageZombie(target, msg.damage, new THREE.Vector3(msg.hx, msg.hy, msg.hz), msg.isHeadshot, true);
+    } else if (msg.type === 'REMOTE_DAMAGE' && net.mode === 'CLIENT' && net.connected && state.status === 'PLAYING') {
+        if (Number.isFinite(msg.amount) && msg.amount > 0 && msg.amount <= 200) takePlayerDamage(msg.amount);
+    } else if (msg.type === 'EXPLODE_BARREL' && net.connected) {
         const barrel = explosiveBarrels.find(b => b.id === msg.id);
         if (barrel && !barrel.exploded) triggerBarrelExplosion(barrel, true);
-    } else if (msg.type === 'REVIVE_ALLY') {
+    } else if (msg.type === 'REVIVE_ALLY' && net.connected) {
         if (state.isDowned) {
             state.isDowned = false; state.health = Math.round(state.maxHealth * 0.6);
             sound.playPickup(); showCenterAlert('REANIMADO PELO PARCEIRO B.S.A.A.!', 2200); updateHUD();
         }
-    } else if (msg.type === 'TACTICAL_PING') {
+    } else if (msg.type === 'TACTICAL_PING' && net.connected) {
         sound.playPing(); showCenterAlert(`📡 ${net.ally.name}: ${msg.text}`, 2200);
     }
 }
@@ -174,7 +428,7 @@ function updateCoopHUD() {
 
     if (!net.connected) {
         dot.className = 'w-2.5 h-2.5 rounded-full bg-slate-500';
-        label.textContent = net.mode === 'HOST' ? 'Aguardando Parceiro B.S.A.A....' : 'Modo Solo (Chris / Sheva)';
+        label.textContent = net.mode === 'HOST' ? 'Aguardando Parceiro B.S.A.A....' : net.mode === 'CLIENT' ? 'Conectando ao host...' : 'Modo Solo (Chris / Sheva)';
         if (net.roomCode) { codeBadge.textContent = net.roomCode; codeBadge.classList.remove('hidden'); }
         else { codeBadge.classList.add('hidden'); }
         allyBox.classList.add('hidden'); pingBtn.classList.add('hidden');

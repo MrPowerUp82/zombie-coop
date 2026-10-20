@@ -7,8 +7,8 @@ function initThreeJS() {
     generateProceduralTextures();
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x130a04); // Fundo âmbar entardecer RE5
-    scene.fog = new THREE.FogExp2(0x130a04, 0.0125);
+    scene.background = new THREE.Color(0x42372e); // Atmosfera árida cinematográfica
+    scene.fog = new THREE.FogExp2(0x42372e, 0.0072);
 
     camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.1, 240);
     camera.rotation.order = 'YXZ';
@@ -16,11 +16,11 @@ function initThreeJS() {
 
     renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.28;
+    renderer.toneMappingExposure = 1.05;
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.domElement.id = 'game-canvas';
     if (dom.container) dom.container.appendChild(renderer.domElement);
@@ -31,17 +31,28 @@ function initThreeJS() {
     buildEnvironment();
     buildFirstPersonWeapons();
     buildCoopAllyAvatar();
+    if (typeof initializeCinematicPost === 'function') initializeCinematicPost();
     setupEventListeners();
 }
 
 function toggleGraphicsQuality() {
     gfxQuality = gfxQuality === 'ULTRA' ? 'ALTO' : 'ULTRA';
+    const isUltra=gfxQuality==='ULTRA';
     const lbl = document.getElementById('gfx-label');
     if (lbl) lbl.textContent = `GFX: ${gfxQuality}`;
-    renderer.setPixelRatio(gfxQuality === 'ULTRA' ? Math.min(window.devicePixelRatio, 2) : 1);
-    renderer.shadowMap.enabled = (gfxQuality === 'ULTRA');
-    if (flashlightBeam) flashlightBeam.visible = (gfxQuality === 'ULTRA' && state.flashlightOn);
-    showCenterAlert(`✨ QUALIDADE GRÁFICA: ${gfxQuality}`, 1000);
+    renderer.setPixelRatio(isUltra ? Math.min(window.devicePixelRatio || 1, 1.6) : 1);
+    renderer.shadowMap.enabled = true;
+    if(scene.userData.sunLight) {
+        scene.userData.sunLight.shadow.mapSize.set(isUltra?2048:1024,isUltra?2048:1024);
+        // Força reconstruir a textura de sombra ao trocar preset.
+        if(scene.userData.sunLight.shadow.map) {
+            scene.userData.sunLight.shadow.map.dispose();
+            scene.userData.sunLight.shadow.map=null;
+        }
+    }
+    if (flashlightBeam) flashlightBeam.visible = (isUltra && state.flashlightOn);
+    if (typeof resizeCinematicPost === 'function') resizeCinematicPost();
+    showCenterAlert(`✨ GRÁFICOS ${gfxQuality}: ${isUltra ? 'BLOOM + PÓS-PROCESSAMENTO' : 'MODO DESEMPENHO'}`, 1500);
 }
 
 function cancelReload() {
@@ -173,7 +184,7 @@ function fireWeapon() {
     setTimeout(() => { if (muzzleFlash) muzzleFlash.visible = false; if (muzzleLight) muzzleLight.intensity = 0; }, 45);
 
     const targetMeshes = [];
-    zombies.forEach(z => { z.mesh.traverse(c => { if (c.isMesh) targetMeshes.push(c); }); });
+    zombies.forEach(z => { z.mesh.traverse(c => { if (c.isMesh && c.userData && c.userData.isZombiePart && c.visible) targetMeshes.push(c); }); });
     explosiveBarrels.forEach(b => { if (!b.exploded) b.mesh.traverse(c => { if (c.isMesh) targetMeshes.push(c); }); });
     obstacles.forEach(o => targetMeshes.push(o.mesh));
 
@@ -577,10 +588,22 @@ function updateZombies(dt, elapsedTime) {
 
         const dx = targetX - z.mesh.position.x, dz = targetZ - z.mesh.position.z;
         const dist = Math.hypot(dx, dz);
-        z.mesh.rotation.y = Math.atan2(dx, dz);
+        // LOD: o corpo fica sempre presente; só microdetalhes distantes desaparecem.
+        if (z.detailMeshes) {
+            const showDetails=gfxQuality==='ULTRA' ? dist<42 : dist<25;
+            z.detailMeshes.forEach(part=>{part.visible=showDetails;});
+        }
+        if (!(net.mode === 'CLIENT' && net.connected)) z.mesh.rotation.y = Math.atan2(dx, dz);
 
         if (z.parts.hpBg && z.parts.hpFill) {
             z.parts.hpBg.lookAt(camera.position); z.parts.hpFill.lookAt(camera.position);
+        }
+
+        // Apenas o host simula movimentação, ataques e spawn. O cliente interpola
+        // as posições recebidas, evitando duas IAs conflitantes nos mesmos zumbis.
+        if (net.mode === 'CLIENT') {
+            animateZombiePose(z, elapsedTime, Math.hypot(z.mesh.position.x - net.ally.x, z.mesh.position.z - net.ally.z) > 1.8);
+            continue;
         }
 
         if (z.staggerTimer > 0) {
@@ -625,6 +648,7 @@ function updateZombies(dt, elapsedTime) {
                     z.chargeTimer = 0.9;
                     spawnShockwaveRing(z.mesh.position.x, z.mesh.position.z, 0xf43f5e, 3.2);
                 }
+                animateZombiePose(z, elapsedTime, false);
                 continue;
             } else if (z.chargeState === 'CHARGING') {
                 z.chargeTimer -= dt;
@@ -634,11 +658,14 @@ function updateZombies(dt, elapsedTime) {
                 if (z.chargeTimer <= 0 || postDist <= attackRange) {
                     z.chargeState = 'IDLE';
                     z.chargeCooldown = 6.5;
-                    if (postDist <= attackRange && targetingLocal && z.attackCooldown <= 0) {
-                        takePlayerDamage(z.damage); z.attackCooldown = 1.05;
+                    if (postDist <= attackRange && z.attackCooldown <= 0) {
+                        if (targetingLocal) takePlayerDamage(z.damage);
+                        else if (net.connected && net.mode === 'HOST') sendNetMessage({ type: 'REMOTE_DAMAGE', amount: z.damage });
+                        z.attackCooldown = 1.05;
                     }
                 }
                 if (z.attackCooldown > 0) z.attackCooldown -= dt;
+                animateZombiePose(z, elapsedTime, true);
                 continue;
             }
         }
@@ -663,13 +690,16 @@ function updateZombies(dt, elapsedTime) {
             const stepped = steerEntityMove(z.mesh.position.x, z.mesh.position.z, moveDirX, moveDirZ, z.speed * dt, zRadius);
             z.mesh.position.x = stepped.x; z.mesh.position.z = stepped.z;
 
-            const walkPhase = elapsedTime * z.speed * 2.3 + z.animOffset;
-            z.parts.leftLeg.rotation.x = Math.sin(walkPhase) * 0.55;
-            z.parts.rightLeg.rotation.x = -Math.sin(walkPhase) * 0.55;
-        } else if (targetingLocal) {
-            const targetPlayerY = state.isDowned ? 0.65 : CONFIG.playerHeight;
-            if (z.attackCooldown <= 0 && Math.abs(camera.position.y - targetPlayerY) < 1.3) {
-                takePlayerDamage(z.damage); z.attackCooldown = 1.05;
+            animateZombiePose(z, elapsedTime, true);
+        } else {
+            animateZombiePose(z, elapsedTime, false);
+            if (z.attackCooldown <= 0) {
+                if (targetingLocal && Math.abs(camera.position.y - (state.isDowned ? 0.65 : CONFIG.playerHeight)) < 1.3) {
+                    takePlayerDamage(z.damage); z.attackCooldown = 1.05;
+                } else if (!targetingLocal && net.connected && net.mode === 'HOST') {
+                    sendNetMessage({ type: 'REMOTE_DAMAGE', amount: z.damage });
+                    z.attackCooldown = 1.05;
+                }
             }
         }
         if (z.attackCooldown > 0) z.attackCooldown -= dt;
@@ -681,6 +711,7 @@ function updateZombies(dt, elapsedTime) {
 }
 
 function updateEffectsAndCrates(dt, elapsedTime) {
+    updateExplosionVisuals(dt);
     for (let i = dyingZombies.length - 1; i >= 0; i--) {
         const dz = dyingZombies[i];
         dz.life -= dt;
@@ -691,6 +722,7 @@ function updateEffectsAndCrates(dt, elapsedTime) {
         if (dz.life < 0.35) dz.mesh.position.y -= dt * 1.8;
         if (dz.life <= 0) {
             scene.remove(dz.mesh);
+            disposeVisualObject(dz.mesh);
             dyingZombies.splice(i, 1);
         }
     }
@@ -750,7 +782,17 @@ function updateEffectsAndCrates(dt, elapsedTime) {
         const p = particles[i];
         p.life -= dt; p.vel.y -= 15 * dt; p.mesh.position.addScaledVector(p.vel, dt);
         if (p.mesh.position.y < 0.05) { p.mesh.position.y = 0.05; p.vel.x *= 0.7; p.vel.z *= 0.7; }
-        if (p.life <= 0) { scene.remove(p.mesh); particles.splice(i, 1); }
+        if (p.maxLife) {
+            const scale=Math.max(0.08,p.life/p.maxLife);
+            p.mesh.scale.multiplyScalar(Math.max(0.75,1-dt*1.3));
+        }
+        if (p.life <= 0) {
+            scene.remove(p.mesh);
+            if(p.batch && --p.batch.remaining===0) {
+                p.batch.geometry.dispose();p.batch.material.dispose();
+            }
+            particles.splice(i, 1);
+        }
     }
 
     state.crateTimer -= dt;
@@ -788,6 +830,7 @@ function updateEffectsAndCrates(dt, elapsedTime) {
                 const pos = g.mesh.position.clone();
                 spawnImpactParticles(pos, 0xf97316, 30);
                 spawnShockwaveRing(pos.x, pos.z, 0xf59e0b, 9.0);
+                spawnExplosionVisual(pos, 2.8);
                 spawnGroundDecal(pos.x, pos.z, 0x130a04, 2.1);
                 state.screenShake = 0.25;
 
@@ -989,22 +1032,34 @@ function buyPerk(perkType) {
 
 function startGame(fromNetwork = false) {
     sound.init();
+    if (net.mode === 'CLIENT' && !net.connected) {
+        showCenterAlert('AGUARDE A CONEXÃO COM O HOST!', 1800);
+        return;
+    }
+    if (net.mode === 'CLIENT' && net.connected && !fromNetwork && state.status !== 'PAUSED') {
+        showCenterAlert('AGUARDE O HOST INICIAR A MISSÃO!', 1800);
+        return;
+    }
     const nicknameInput = document.getElementById('player-nickname');
     if (nicknameInput) net.myName = (nicknameInput.value || 'Chris Redfield').trim();
-    if (!fromNetwork && net.connected) sendNetMessage({ type: 'START_MATCH' });
     if (state.status === 'PAUSED') {
         state.status = 'PLAYING'; dom.modal.classList.add('hidden'); requestPointerLockSafely(); return;
     }
 
+    if (!fromNetwork && net.mode === 'HOST') {
+        net.matchId += 1;
+        if (net.connected) sendNetMessage({ type: 'START_MATCH', matchId: net.matchId });
+    }
     if (state.bossSpawnTimerId) { clearTimeout(state.bossSpawnTimerId); state.bossSpawnTimerId = null; }
     if (state.nextWaveTimerId) { clearTimeout(state.nextWaveTimerId); state.nextWaveTimerId = null; }
 
-    zombies.forEach(z => scene.remove(z.mesh)); zombies = [];
-    dyingZombies.forEach(dz => scene.remove(dz.mesh)); dyingZombies = [];
-    lootDrops.forEach(d => scene.remove(d.mesh)); lootDrops = [];
+    zombies.forEach(z => {scene.remove(z.mesh);disposeVisualObject(z.mesh);}); zombies = [];
+    dyingZombies.forEach(dz => {scene.remove(dz.mesh);disposeVisualObject(dz.mesh);}); dyingZombies = [];
+    lootDrops.forEach(d => {scene.remove(d.mesh);disposeVisualObject(d.mesh);}); lootDrops = [];
     supplyCrates.forEach(c => scene.remove(c.mesh)); supplyCrates = [];
     activeTurrets.forEach(t => scene.remove(t.mesh)); activeTurrets = [];
     activeGrenades.forEach(g => scene.remove(g.mesh)); activeGrenades = [];
+    explosionFX.forEach(fx=>{scene.remove(fx.group);fx.shells.forEach(p=>{p.mesh.geometry.dispose();p.mat.dispose();});});explosionFX=[];
 
     state.status = 'PLAYING'; state.score = 0; state.wave = 1; state.kills = 0; state.combo = 1; state.grenades = 3;
     state.maxHealth = CONFIG.maxHealth; state.health = CONFIG.maxHealth; state.stamina = CONFIG.maxStamina; state.isDowned = false;
@@ -1022,7 +1077,10 @@ function startGame(fromNetwork = false) {
     camera.position.set(net.mode === 'CLIENT' ? 2.5 : -2.5, CONFIG.playerHeight, 0);
 
     spawnExplosiveBarrels(); spawnSupplyCrate(); spawnSupplyCrate();
-    startWave(1); updateHUD(); updateCoopHUD();
+    if (net.mode === 'CLIENT' && net.connected) {
+        state.zombiesToSpawn = 0; state.spawnTimer = 0;
+    } else startWave(1);
+    updateHUD(); updateCoopHUD();
     dom.modal.classList.add('hidden'); dom.shopModal.classList.add('hidden');
     requestPointerLockSafely();
 }
@@ -1037,7 +1095,8 @@ function pauseGame() {
     dom.modal.classList.remove('hidden');
 }
 
-function triggerGameOver() {
+function triggerGameOver(fromNetwork = false) {
+    if (!fromNetwork && net.mode === 'HOST' && net.connected) sendNetMessage({ type: 'MATCH_END' });
     cancelReload();
     if (state.bossSpawnTimerId) { clearTimeout(state.bossSpawnTimerId); state.bossSpawnTimerId = null; }
     if (state.nextWaveTimerId) { clearTimeout(state.nextWaveTimerId); state.nextWaveTimerId = null; }
@@ -1075,6 +1134,7 @@ function setupEventListeners() {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
+        if (typeof resizeCinematicPost === 'function') resizeCinematicPost();
     });
 
     window.addEventListener('keydown', (e) => {
@@ -1291,7 +1351,9 @@ function animate() {
         camera.lookAt(0, 1.2, 0);
     }
 
-    renderer.render(scene, camera);
+    animateCoopAlly(dt,elapsedTime);
+    if (typeof renderCinematicFrame === 'function') renderCinematicFrame(dt, elapsedTime);
+    else renderer.render(scene,camera);
 }
 
 window.onload = function () {

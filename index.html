@@ -5,6 +5,7 @@
     <title>Zumbi 3D: Resident Evil 5 Style (Co-op P2P)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
 </head>
@@ -326,7 +327,7 @@
                     B.S.A.A. // Zona Kijuju (RE5 Style)
                 </span>
                 <span class="px-3 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 text-[11px] font-bold uppercase tracking-widest">
-                    Co-op P2P Sem Servidor
+                    Co-op online WebRTC
                 </span>
             </div>
 
@@ -359,7 +360,7 @@
                             🌐 Esquadrão B.S.A.A. (Canal Direto / WebRTC / Co-op)
                         </div>
                         <div id="p2p-status-text" class="text-xs text-amber-200/70 mt-0.5">
-                            Crie uma sala P2P com código, conecte duas abas ou ative o parceiro IA tático!
+                            Crie uma sala online, envie o código para um amigo e joguem juntos!
                         </div>
                     </div>
                     <div class="flex items-center gap-2">
@@ -372,7 +373,7 @@
                     <div class="p-3 rounded-lg bg-black/80 border border-amber-900/50 flex flex-col justify-between">
                         <div>
                             <div class="text-xs font-bold text-amber-400 mb-1">1. Criar Sala P2P (Host)</div>
-                            <p class="text-[11px] text-amber-200/70 mb-2">Abra uma sala direta sem servidores externos.</p>
+                            <p class="text-[11px] text-amber-200/70 mb-2">Conexão WebRTC entre navegadores, com sinalização online.</p>
                         </div>
                         <div id="host-code-box" class="hidden mb-2 p-1.5 rounded bg-amber-950/60 border border-amber-500/40 flex items-center justify-between">
                             <span id="host-room-code" class="font-orbitron font-black text-sm text-amber-300 tracking-wider">---</span>
@@ -386,8 +387,8 @@
                     <div class="p-3 rounded-lg bg-black/80 border border-amber-900/50 flex flex-col justify-between">
                         <div>
                             <div class="text-xs font-bold text-sky-400 mb-1">2. Entrar na Sala</div>
-                            <p class="text-[11px] text-amber-200/70 mb-2">Digite o código da sala do seu parceiro:</p>
-                            <input id="join-code-input" type="text" placeholder="Ex: RE5AB"
+                            <p class="text-[11px] text-amber-200/70 mb-2">Seu amigo precisa usar o mesmo site e código:</p>
+                            <input id="join-code-input" type="text" placeholder="Ex: RE5ABCDE" maxlength="8"
                                 class="interactive w-full px-2.5 py-1.5 rounded bg-slate-900 border border-amber-700 text-xs font-orbitron text-sky-300 uppercase mb-2 focus:outline-none focus:border-sky-400">
                         </div>
                         <button id="btn-join-room" class="interactive w-full py-2 px-3 rounded-lg bg-sky-600/30 hover:bg-sky-600/50 border border-sky-500/50 text-sky-300 font-bold text-xs transition">
@@ -398,11 +399,11 @@
                     <div class="p-3 rounded-lg bg-black/80 border border-amber-900/50 flex flex-col justify-between">
                         <div>
                             <div class="text-xs font-bold text-emerald-400 mb-1">3. Co-op Instantâneo</div>
-                            <p class="text-[11px] text-amber-200/70 mb-2">Sincronize abas ou ative a Sheva Alomar (Parceira IA) agora!</p>
+                            <p class="text-[11px] text-amber-200/70 mb-2">Teste em duas abas da mesma origem ou jogue com a IA!</p>
                         </div>
                         <div class="flex flex-col gap-1.5">
                             <button id="btn-local-tab-sync" class="interactive w-full py-1.5 px-2.5 rounded-lg bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 text-amber-300 font-bold text-[11px] transition">
-                                ⚡ Sincronizar Abas P2P
+                                ⚡ Testar em duas abas
                             </button>
                             <button id="btn-coop-bot" class="interactive w-full py-1.5 px-2.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 text-emerald-300 font-bold text-[11px] transition">
                                 👩‍✈️ Ativar Sheva (IA Co-op)
@@ -410,6 +411,12 @@
                         </div>
                     </div>
                 </div>
+                <div class="mt-2 text-[11px] text-amber-200/80 flex flex-col sm:flex-row sm:items-center gap-2">
+                    <label for="coop-server-url" class="font-bold shrink-0">Servidor opcional (LAN / próprio):</label>
+                    <input id="coop-server-url" type="url" placeholder="Vazio = WebRTC online | ws://192.168.1.10:8080"
+                        class="interactive w-full px-2 py-1.5 rounded bg-slate-900 border border-amber-800 text-sky-200 text-[11px] focus:outline-none focus:border-sky-400">
+                </div>
+                <p class="mt-1 text-[10px] text-slate-400">Online requer internet e PeerJS. Para rede local, rode server.js e abra o endereço dele em ambos os dispositivos. Até 2 jogadores por sala.</p>
             </div>
 
             <div class="text-left bg-black/75 rounded-xl p-3.5 mb-5 border border-amber-900/50 grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px] text-amber-200/90">
@@ -433,6 +440,7 @@
     <script src="js/audio.js"></script>
     <script src="js/network.js"></script>
     <script src="js/entities.js"></script>
+    <script src="js/visuals.js"></script>
     <script src="js/main.js"></script>
 </body>
 </html>
