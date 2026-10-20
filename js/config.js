@@ -94,7 +94,19 @@ let scene, camera, renderer, clock;
 let gunGroup, weaponModels = [], muzzleFlash, muzzleLight, playerFlashlight, playerFlashlightTarget, flashlightBeam;
 let obstacles = [], zombies = [], particles = [], bulletTracers = [], supplyCrates = [], dyingZombies = [], lootDrops = [];
 let explosiveBarrels = [], activeGrenades = [], activeTurrets = [], shellCasings = [], groundDecals = [], shockwaves = [];
-let ambientDust = null, procTextures = {}, gfxQuality = 'ULTRA', explosionFX = [];
+// Opções de vídeo independentes da simulação/da rede.
+// pixelRatio é uma fração de pixels CSS (limitada ao DPR físico quando aplicável).
+const GRAPHICS_PRESETS = Object.freeze({
+    AUTO:       { label:'AUTO',     ratio:1.1, shadows:1024, details:30, hpBars:28, particles:0.75, dust:180, foliage:0.7, lamps:true, bloom:false, casings:false, rings:true, anisotropy:2 },
+    ECONOMICO:  { label:'ECONÔMICO',ratio:0.65,shadows:0,    details:9,  hpBars:13, particles:0.30, dust:0,   foliage:0.15,lamps:false,bloom:false, casings:false, rings:false,anisotropy:1 },
+    BAIXO:      { label:'BAIXO',    ratio:0.8, shadows:0,    details:16, hpBars:17, particles:0.45, dust:70,  foliage:0.35,lamps:false,bloom:false, casings:false, rings:false,anisotropy:1 },
+    MEDIO:      { label:'MÉDIO',    ratio:1.0, shadows:512,  details:24, hpBars:22, particles:0.65, dust:140, foliage:0.60,lamps:true, bloom:false, casings:false, rings:true, anisotropy:2 },
+    ALTO:       { label:'ALTO',     ratio:1.25,shadows:1024, details:38, hpBars:30, particles:0.85, dust:250, foliage:0.85,lamps:true, bloom:false, casings:true, rings:true, anisotropy:4 },
+    ULTRA:      { label:'ULTRA',    ratio:1.6, shadows:2048, details:55, hpBars:36, particles:1.0,  dust:320, foliage:1.0, lamps:true, bloom:true,  casings:true, rings:true, anisotropy:8 }
+});
+let ambientDust = null, procTextures = {}, gfxQuality = 'AUTO', explosionFX = [];
+let graphicsAutoRatio = 1.1, graphicsFpsSmoothed = 60, graphicsAutoTimer = 0;
+function currentGraphicsPreset() { return GRAPHICS_PRESETS[gfxQuality] || GRAPHICS_PRESETS.AUTO; }
 const raycaster = new THREE.Raycaster();
 
 const dom = {

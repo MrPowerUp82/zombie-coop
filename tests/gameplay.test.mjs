@@ -427,5 +427,5 @@ test('Visual 2: cinematic shader pipeline is loaded after entities but before ga
     assert.ok(srcEntities>=0 && srcVisual>srcEntities && srcMain>srcVisual);
     const visualCode=fs.readFileSync(path.resolve(process.cwd(),'js/visuals.js'),'utf8');
     assert.ok(visualCode.includes('function renderCinematicFrame'));
-    assert.ok(visualCode.includes("gfxQuality !== 'ULTRA'"), 'quality fallback must skip postprocessing');
+    assert.ok(visualCode.includes('!currentGraphicsPreset().bloom'), 'perfis sem bloom precisam evitar o pós-processamento');
 });

@@ -4,6 +4,12 @@
 // ==========================================
 
 function initThreeJS() {
+    // Carrega a preferência antes de criar o contexto WebGL.
+    try {
+        const saved = localStorage.getItem('zombie-coop-graphics');
+        if (saved && GRAPHICS_PRESETS[saved]) gfxQuality = saved;
+    } catch (err) { /* navegação privada/sem storage */ }
+    graphicsAutoRatio = Math.min(Math.max(1, window.devicePixelRatio || 1), currentGraphicsPreset().ratio);
     generateProceduralTextures();
 
     scene = new THREE.Scene();
@@ -14,10 +20,10 @@ function initThreeJS() {
     camera.rotation.order = 'YXZ';
     camera.position.set(0, CONFIG.playerHeight, 0);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
-    renderer.shadowMap.enabled = true;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, graphicsAutoRatio));
+    renderer.shadowMap.enabled = !!currentGraphicsPreset().shadows;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
@@ -32,27 +38,90 @@ function initThreeJS() {
     buildFirstPersonWeapons();
     buildCoopAllyAvatar();
     if (typeof initializeCinematicPost === 'function') initializeCinematicPost();
+    // Define LOD/sombras após criar os recursos e antes de compilar os shaders.
+    applyGraphicsQuality(gfxQuality, false);
     setupEventListeners();
+    if (typeof prewarmGameShaders === 'function') prewarmGameShaders();
+}
+
+function applyGraphicsQuality(name, notify = true) {
+    if (!GRAPHICS_PRESETS[name]) return;
+    gfxQuality = name;
+    const preset = currentGraphicsPreset();
+    graphicsAutoRatio = Math.min(Math.max(1, window.devicePixelRatio || 1), preset.ratio);
+    graphicsAutoTimer = 0;
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    if (renderer) {
+        renderer.setPixelRatio(Math.min(dpr, preset.ratio));
+        renderer.shadowMap.enabled = preset.shadows > 0;
+        renderer.shadowMap.needsUpdate = true;
+        if (scene && scene.userData && scene.userData.sunLight) {
+            const sun = scene.userData.sunLight;
+            sun.castShadow = preset.shadows > 0;
+            const size = Math.max(1, preset.shadows);
+            if (sun.shadow && sun.shadow.mapSize &&
+                (sun.shadow.mapSize.width !== size || sun.shadow.mapSize.height !== size)) {
+                if (typeof sun.shadow.mapSize.set === 'function') sun.shadow.mapSize.set(size, size);
+                else { sun.shadow.mapSize.width = size; sun.shadow.mapSize.height = size; }
+                if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+            }
+        }
+        if (procTextures) {
+            for (const tex of Object.values(procTextures)) {
+                if (tex && tex.anisotropy !== undefined) {
+                    const max = renderer.capabilities && renderer.capabilities.getMaxAnisotropy
+                        ? renderer.capabilities.getMaxAnisotropy() : preset.anisotropy;
+                    const value = Math.min(preset.anisotropy, max);
+                    if (tex.anisotropy !== value) { tex.anisotropy = value; tex.needsUpdate = true; }
+                }
+            }
+        }
+        if (ambientDust && ambientDust.geometry && ambientDust.geometry.setDrawRange) {
+            ambientDust.geometry.setDrawRange(0, preset.dust);
+        }
+        if (scene && scene.userData && scene.userData.localLights) {
+            scene.userData.localLights.forEach(light => { light.visible = preset.lamps; });
+        }
+        if (scene && scene.userData && scene.userData.foliage) {
+            for (const item of scene.userData.foliage) {
+                item.mesh.count = Math.round(item.total * preset.foliage);
+            }
+        }
+        if (flashlightBeam) flashlightBeam.visible = !!(preset.bloom && state.flashlightOn);
+        if (typeof resizeCinematicPost === 'function') resizeCinematicPost();
+    }
+    const lbl = document.getElementById('gfx-label');
+    if (lbl) lbl.textContent = `GFX: ${preset.label}`;
+    const select = document.getElementById('gfx-profile');
+    if (select) select.value = name;
+    try { localStorage.setItem('zombie-coop-graphics', name); } catch (err) {}
+    if (notify) showCenterAlert(`GRÁFICOS ${preset.label} • ${preset.shadows ? 'SOMBRAS' : 'SEM SOMBRAS'} • ${preset.bloom ? 'BLOOM' : 'SEM BLOOM'}`, 1500);
 }
 
 function toggleGraphicsQuality() {
-    gfxQuality = gfxQuality === 'ULTRA' ? 'ALTO' : 'ULTRA';
-    const isUltra=gfxQuality==='ULTRA';
-    const lbl = document.getElementById('gfx-label');
-    if (lbl) lbl.textContent = `GFX: ${gfxQuality}`;
-    renderer.setPixelRatio(isUltra ? Math.min(window.devicePixelRatio || 1, 1.6) : 1);
-    renderer.shadowMap.enabled = true;
-    if(scene.userData.sunLight) {
-        scene.userData.sunLight.shadow.mapSize.set(isUltra?2048:1024,isUltra?2048:1024);
-        // Força reconstruir a textura de sombra ao trocar preset.
-        if(scene.userData.sunLight.shadow.map) {
-            scene.userData.sunLight.shadow.map.dispose();
-            scene.userData.sunLight.shadow.map=null;
-        }
+    const names = Object.keys(GRAPHICS_PRESETS);
+    applyGraphicsQuality(names[(names.indexOf(gfxQuality) + 1) % names.length]);
+}
+
+// Ajusta somente a resolução interna no AUTO. Não modifica a simulação nem
+// recompila shaders/alterações caras em cada frame.
+function updateGraphicsPerformance(dt) {
+    if (dt <= 0 || dt > 0.15) return;
+    graphicsFpsSmoothed += (1 / dt - graphicsFpsSmoothed) * Math.min(1, dt * 0.9);
+    graphicsAutoTimer += dt;
+    const fpsLabel = document.getElementById('gfx-fps');
+    if (graphicsAutoTimer < 2.5) return;
+    graphicsAutoTimer = 0;
+    if (fpsLabel) fpsLabel.textContent = `${Math.round(graphicsFpsSmoothed)} FPS`;
+    if (gfxQuality !== 'AUTO' || state.status !== 'PLAYING' || !renderer) return;
+    const max = Math.min(Math.max(1, window.devicePixelRatio || 1), 1.35);
+    const previous = graphicsAutoRatio;
+    if (graphicsFpsSmoothed < 47) graphicsAutoRatio = Math.max(0.7, previous - 0.1);
+    else if (graphicsFpsSmoothed > 58) graphicsAutoRatio = Math.min(max, previous + 0.05);
+    if (Math.abs(previous - graphicsAutoRatio) >= 0.045) {
+        renderer.setPixelRatio(Math.min(max, graphicsAutoRatio));
+        if (typeof resizeCinematicPost === 'function') resizeCinematicPost();
     }
-    if (flashlightBeam) flashlightBeam.visible = (isUltra && state.flashlightOn);
-    if (typeof resizeCinematicPost === 'function') resizeCinematicPost();
-    showCenterAlert(`✨ GRÁFICOS ${gfxQuality}: ${isUltra ? 'BLOOM + PÓS-PROCESSAMENTO' : 'MODO DESEMPENHO'}`, 1500);
 }
 
 function cancelReload() {
@@ -179,19 +248,23 @@ function fireWeapon() {
     dom.crosshair.classList.add('crosshair-expand');
     setTimeout(() => dom.crosshair.classList.remove('crosshair-expand'), 80);
 
-    muzzleFlash.visible = true; muzzleFlash.rotation.z = Math.random() * Math.PI * 2;
-    muzzleLight.intensity = 2.6;
-    setTimeout(() => { if (muzzleFlash) muzzleFlash.visible = false; if (muzzleLight) muzzleLight.intensity = 0; }, 45);
+    activateLocalMuzzle(wep.id);
+    shotFX.fireCount++;
+    // Fumaça fina no cano para armas pesadas; intervalos na rajada evitam sobrecarga.
+    if (wep.id !== 'RIFLE' || shotFX.fireCount % 3 === 0) {
+        const smokeOrigin = new THREE.Vector3(0.32,-0.25,-1.27).applyMatrix4(camera.matrixWorld);
+        emitShotSmoke(smokeOrigin,wep.id==='SHOTGUN'?3:wep.id==='RAILGUN'?2:1);
+    }
 
     const targetMeshes = [];
     zombies.forEach(z => { z.mesh.traverse(c => { if (c.isMesh && c.userData && c.userData.isZombiePart && c.visible) targetMeshes.push(c); }); });
     explosiveBarrels.forEach(b => { if (!b.exploded) b.mesh.traverse(c => { if (c.isMesh) targetMeshes.push(c); }); });
     obstacles.forEach(o => targetMeshes.push(o.mesh));
 
-    const barrelTip = new THREE.Vector3(0.28, -0.22, -1.1).applyMatrix4(camera.matrixWorld);
+    const barrelTip = new THREE.Vector3(0.32, -0.25, -1.27).applyMatrix4(camera.matrixWorld);
     const dmgMult = 1 + (state.perks.damageLvl - 1) * 0.25;
     const effectiveSpread = state.isAiming ? wep.spread * 0.2 : wep.spread;
-    const tracerColor = wep.id === 'RAILGUN' ? 0xf59e0b : 0xfde047;
+    const tracerColor = shotStyle(wep.id).color;
 
     for (let p = 0; p < wep.pellets; p++) {
         const spreadX = (Math.random() - 0.5) * effectiveSpread;
@@ -212,11 +285,13 @@ function fireWeapon() {
                 const isHead = hitZone === 'HEAD';
                 const totalDmg = Math.round(wep.damage * dmgMult * (isHead ? wep.headshotMult : 1));
                 damageZombie(zombieRef, totalDmg, hit.point, isHead, false, hitZone);
+                if (p < 3) emitShotImpact(hit.point, wep.id, 'FLESH', isHead);
             } else {
-                spawnImpactParticles(hit.point, 0xfbbf24, 4);
+                spawnImpactParticles(hit.point, wep.id === 'RAILGUN' ? 0x67e8ff : 0xfbbf24, wep.id === 'SHOTGUN' ? 3 : 5);
+                if (p < 3) emitShotImpact(hit.point, wep.id, 'WALL');
             }
         }
-        createBulletTracer(barrelTip, endPoint, tracerColor);
+        createBulletTracer(barrelTip, endPoint, tracerColor, wep.id);
         if (p === 0 && net.connected) {
             sendNetMessage({
                 type: 'SHOOT_FX', weaponId: wep.id,
@@ -590,12 +665,20 @@ function updateZombies(dt, elapsedTime) {
         const dist = Math.hypot(dx, dz);
         // LOD: o corpo fica sempre presente; só microdetalhes distantes desaparecem.
         if (z.detailMeshes) {
-            const showDetails=gfxQuality==='ULTRA' ? dist<42 : dist<25;
-            z.detailMeshes.forEach(part=>{part.visible=showDetails;});
+            const showDetails=distLocal < currentGraphicsPreset().details;
+            // Não precisa reatribuir a cada quadro quando o valor não mudou.
+            if (z.detailsVisible !== showDetails) {
+                z.detailMeshes.forEach(part => { part.visible = showDetails; });
+                z.detailsVisible = showDetails;
+            }
+        }
+        if (z.parts.hpBg && z.parts.hpFill) {
+            const showHP = distLocal < currentGraphicsPreset().hpBars;
+            z.parts.hpBg.visible = showHP; z.parts.hpFill.visible = showHP;
         }
         if (!(net.mode === 'CLIENT' && net.connected)) z.mesh.rotation.y = Math.atan2(dx, dz);
 
-        if (z.parts.hpBg && z.parts.hpFill) {
+        if (z.parts.hpBg && z.parts.hpFill && z.parts.hpBg.visible) {
             z.parts.hpBg.lookAt(camera.position); z.parts.hpFill.lookAt(camera.position);
         }
 
@@ -732,6 +815,7 @@ function updateEffectsAndCrates(dt, elapsedTime) {
         drop.life = (drop.life !== undefined ? drop.life : 18) - dt;
         if (drop.life <= 0) {
             scene.remove(drop.mesh);
+            disposeVisualObject(drop.mesh);
             lootDrops.splice(i, 1);
             continue;
         }
@@ -768,15 +852,12 @@ function updateEffectsAndCrates(dt, elapsedTime) {
             }
             updateHUD();
             scene.remove(drop.mesh);
+            disposeVisualObject(drop.mesh);
             lootDrops.splice(i, 1);
         }
     }
 
-    for (let i = bulletTracers.length - 1; i >= 0; i--) {
-        const t = bulletTracers[i];
-        t.life -= dt; t.mat.opacity = Math.max(0, t.life * 14);
-        if (t.life <= 0) { scene.remove(t.line); t.line.geometry.dispose(); t.mat.dispose(); bulletTracers.splice(i, 1); }
-    }
+    updateShotEffects(dt);
 
     for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
@@ -816,7 +897,7 @@ function updateEffectsAndCrates(dt, elapsedTime) {
                 state.grenades = Math.min(5, state.grenades + 1);
                 showCenterAlert('+MUNIÇÃO & +1 GRANADA!', 1200);
             }
-            updateHUD(); scene.remove(c.mesh); supplyCrates.splice(i, 1);
+            updateHUD(); scene.remove(c.mesh); disposeVisualObject(c.mesh); supplyCrates.splice(i, 1);
         }
     }
 
@@ -839,7 +920,7 @@ function updateEffectsAndCrates(dt, elapsedTime) {
                     const d = Math.hypot(z.mesh.position.x - pos.x, z.mesh.position.z - pos.z);
                     if (d < 9.0) damageZombie(z, Math.round(280 * (1 - d / 10)), z.mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0)), false, true);
                 }
-                scene.remove(g.mesh); activeGrenades.splice(i, 1);
+                scene.remove(g.mesh); disposeVisualObject(g.mesh); activeGrenades.splice(i, 1);
             }
         }
 
@@ -859,7 +940,8 @@ function updateEffectsAndCrates(dt, elapsedTime) {
                     t.cooldown = 0.28; sound.playShoot('PISTOL');
                     const startPos = t.mesh.position.clone().add(new THREE.Vector3(0, 1.05, 0));
                     const hitPos = nearestZ.mesh.position.clone().add(new THREE.Vector3(0, 1.25, 0));
-                    createBulletTracer(startPos, hitPos, 0xf59e0b);
+                    createBulletTracer(startPos, hitPos, shotStyle('RIFLE').color, 'RIFLE');
+                    emitShotImpact(hitPos, 'RIFLE', 'FLESH');
                     damageZombie(nearestZ, 20, hitPos, false, true);
                 }
             } else { t.headMesh.rotation.y += 0.8 * dt; }
@@ -1056,9 +1138,16 @@ function startGame(fromNetwork = false) {
     zombies.forEach(z => {scene.remove(z.mesh);disposeVisualObject(z.mesh);}); zombies = [];
     dyingZombies.forEach(dz => {scene.remove(dz.mesh);disposeVisualObject(dz.mesh);}); dyingZombies = [];
     lootDrops.forEach(d => {scene.remove(d.mesh);disposeVisualObject(d.mesh);}); lootDrops = [];
-    supplyCrates.forEach(c => scene.remove(c.mesh)); supplyCrates = [];
-    activeTurrets.forEach(t => scene.remove(t.mesh)); activeTurrets = [];
-    activeGrenades.forEach(g => scene.remove(g.mesh)); activeGrenades = [];
+    supplyCrates.forEach(c => {scene.remove(c.mesh);disposeVisualObject(c.mesh);}); supplyCrates = [];
+    activeTurrets.forEach(t => {scene.remove(t.mesh);disposeVisualObject(t.mesh);}); activeTurrets = [];
+    activeGrenades.forEach(g => {scene.remove(g.mesh);disposeVisualObject(g.mesh);}); activeGrenades = [];
+    clearShotEffects();
+    const particleBatches = new Set();
+    particles.forEach(p => {scene.remove(p.mesh);if(p.batch)particleBatches.add(p.batch);});particles=[];
+    particleBatches.forEach(b => {b.geometry.dispose();b.material.dispose();});
+    shellCasings.forEach(s => {scene.remove(s.mesh);disposeVisualObject(s.mesh);});shellCasings=[];
+    groundDecals.forEach(d => {scene.remove(d.mesh);disposeVisualObject(d.mesh);});groundDecals=[];
+    shockwaves.forEach(sw => {scene.remove(sw.mesh);disposeVisualObject(sw.mesh);});shockwaves=[];
     explosionFX.forEach(fx=>{scene.remove(fx.group);fx.shells.forEach(p=>{p.mesh.geometry.dispose();p.mat.dispose();});});explosionFX=[];
 
     state.status = 'PLAYING'; state.score = 0; state.wave = 1; state.kills = 0; state.combo = 1; state.grenades = 3;
@@ -1118,7 +1207,7 @@ function requestPointerLockSafely() {
 function toggleFlashlight() {
     state.flashlightOn = !state.flashlightOn;
     playerFlashlight.intensity = state.flashlightOn ? 2.4 : 0;
-    if (flashlightBeam) flashlightBeam.visible = (state.flashlightOn && gfxQuality === 'ULTRA');
+    if (flashlightBeam) flashlightBeam.visible = (state.flashlightOn && currentGraphicsPreset().bloom);
     showCenterAlert(state.flashlightOn ? '🔦 LANTERNA LIGADA' : '🔦 LANTERNA DESLIGADA', 700);
 }
 
@@ -1155,7 +1244,7 @@ function setupEventListeners() {
         if (code === 'KeyQ' && state.status === 'PLAYING') performTacticalDash();
         if (code === 'KeyR' && state.status === 'PLAYING') reloadWeapon();
         if (code === 'KeyF' && state.status === 'PLAYING') toggleFlashlight();
-        if (code === 'KeyV') toggleGraphicsQuality();
+        if (code === 'KeyV' && !e.repeat) toggleGraphicsQuality();
         if (code === 'KeyT' && state.status === 'PLAYING') sendTacticalPing();
         if (code === 'KeyB') { if (state.status === 'PLAYING' || state.status === 'SHOP') toggleShopModal(); }
         if (code === 'KeyP' || code === 'Escape') {
@@ -1217,6 +1306,8 @@ function setupEventListeners() {
     const btnCloseShop = document.getElementById('btn-close-shop');
     if (btnCloseShop) btnCloseShop.addEventListener('click', toggleShopModal);
     if (dom.btnFlashlight) dom.btnFlashlight.addEventListener('click', toggleFlashlight);
+    const profileSelect = document.getElementById('gfx-profile');
+    if (profileSelect) profileSelect.addEventListener('change', e => applyGraphicsQuality(e.target.value));
     const btnGfx = document.getElementById('btn-gfx');
     if (btnGfx) btnGfx.addEventListener('click', toggleGraphicsQuality);
     if (dom.btnReloadHud) dom.btnReloadHud.addEventListener('click', reloadWeapon);
@@ -1335,6 +1426,7 @@ function animate() {
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.1);
     const elapsedTime = clock.getElapsedTime();
+    updateGraphicsPerformance(dt);
 
     if (state.status === 'PLAYING' || state.status === 'SHOP') {
         if (state.status === 'PLAYING') updatePlayer(dt);
@@ -1343,7 +1435,9 @@ function animate() {
         }
         updateEffectsAndCrates(dt, elapsedTime);
         updateNetworkSync(elapsedTime, dt);
-        drawRadar();
+        if (!animate.lastRadarTime || elapsedTime - animate.lastRadarTime > 0.083) {
+            drawRadar(); animate.lastRadarTime = elapsedTime;
+        }
     } else if (state.status === 'MENU') {
         camera.position.x = Math.sin(elapsedTime * 0.18) * 14;
         camera.position.z = Math.cos(elapsedTime * 0.18) * 14;

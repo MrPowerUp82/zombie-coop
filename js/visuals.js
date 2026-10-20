@@ -120,7 +120,7 @@ function resizeCinematicPost() {
 }
 
 function renderCinematicFrame(dt,elapsedTime) {
-    if(!cinematicPost || gfxQuality !== 'ULTRA') {
+    if(!cinematicPost || !currentGraphicsPreset().bloom) {
         renderer.render(scene,camera);
         return;
     }
@@ -146,4 +146,107 @@ function renderCinematicFrame(dt,elapsedTime) {
     fx.composeMaterial.uniforms.uTime.value=elapsedTime;
     renderer.setRenderTarget(null);
     renderer.render(fx.fsScene,fx.fsCamera);
+}
+
+
+// Pré-compilação antes da primeira missão. renderer.compile() prepara programas GLSL
+// presentes na cena, e o render offscreen antecipa upload de buffers/texturas.
+// O compilador do Three r128 é síncrono; este trabalho ocorre no carregamento,
+// nunca em um timer recorrente durante a partida.
+let shadersPrewarmed = false;
+function prewarmGameShaders() {
+    if (shadersPrewarmed || !renderer || !scene || !camera || typeof renderer.compile !== 'function') return false;
+    const previewObjects = [];
+    const temporarilyVisible = [];
+    let target = null;
+    const oldShadow = renderer.shadowMap.enabled;
+    const oldCastShadow = scene.userData.sunLight ? scene.userData.sunLight.castShadow : false;
+    const oldTarget = typeof renderer.getRenderTarget === 'function' ? renderer.getRenderTarget() : null;
+    try {
+        // Armas ocultas também precisam de buffers/shaders preparados antes do primeiro uso.
+        const weaponVisuals = [...(typeof weaponModels !== 'undefined' ? weaponModels : []),
+            typeof muzzleFlash !== 'undefined' ? muzzleFlash : null,
+            net.ally && net.ally.muzzleFlash ? net.ally.muzzleFlash : null,
+            typeof flashlightBeam !== 'undefined' ? flashlightBeam : null];
+        weaponVisuals.forEach(object => {
+            if (object && !object.visible) {
+                temporarilyVisible.push(object);
+                object.visible = true;
+            }
+        });
+        // Tipos distintos de inimigos usam materiais e geometrias próprias.
+        let i = 0;
+        for (const [name, archetype] of Object.entries(ZOMBIE_TYPES)) {
+            const preview = createZombieMesh(archetype, name === 'ACID');
+            preview.group.position.set((i++ - 2) * 1.3, -0.8, -8);
+            if (preview.parts.staggerRing) preview.parts.staggerRing.visible = true;
+            scene.add(preview.group);
+            previewObjects.push(preview.group);
+        }
+        // Shaders de partículas aditivas, decals, projéteis e efeitos básicos.
+        const warmObjects = [
+            new THREE.Mesh(new THREE.SphereGeometry(0.3,8,6), new THREE.MeshBasicMaterial({color:0xff6633,transparent:true,opacity:0.5,depthWrite:false,blending:THREE.AdditiveBlending})),
+            new THREE.Mesh(new THREE.RingGeometry(0.3,0.5,16),new THREE.MeshBasicMaterial({color:0xffdd88,side:THREE.DoubleSide,transparent:true,opacity:0.8,blending:THREE.AdditiveBlending})),
+            new THREE.Mesh(new THREE.CircleGeometry(0.4,10),new THREE.MeshBasicMaterial({color:0x662211,transparent:true,depthWrite:false})),
+            new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.04,0.2,6),new THREE.MeshStandardMaterial({color:0xffcc77,metalness:0.85,roughness:0.2})),
+            new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0),new THREE.Vector3(0,0,1)]), new THREE.LineBasicMaterial({color:0xffd855,transparent:true,opacity:0.85})),
+            // Rastros volumétricos, fumaça e pulso de impacto usam shaders distintos.
+            new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.007,1,6,1,true),new THREE.MeshBasicMaterial({color:0xffed8d,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false})),
+            new THREE.Mesh(new THREE.SphereGeometry(0.15,8,6),new THREE.MeshBasicMaterial({color:0x9b9893,transparent:true,opacity:0.2,depthWrite:false})),
+            new THREE.Mesh(new THREE.RingGeometry(0.18,0.27,16),new THREE.MeshBasicMaterial({color:0x67e8ff,transparent:true,opacity:0.7,blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false}))
+        ];
+        warmObjects.forEach((obj, index) => {
+            obj.position.set(-1.5+index,-0.5,-4);
+            scene.add(obj); previewObjects.push(obj);
+        });
+        // Compila combinações dos perfis com/sem sombras e com/sem luminárias.
+        for (const lamps of [true, false]) {
+            if (scene.userData.localLights) scene.userData.localLights.forEach(light => {light.visible = lamps;});
+            for (const enabled of [true,false]) {
+                renderer.shadowMap.enabled = enabled;
+                if (scene.userData.sunLight) scene.userData.sunLight.castShadow = enabled;
+                renderer.shadowMap.needsUpdate = true;
+                renderer.compile(scene,camera);
+            }
+        }
+        if (cinematicPost) {
+            const fx=cinematicPost;
+            for (const material of [fx.brightMaterial,fx.blurMaterial,fx.composeMaterial]) {
+                fx.quad.material = material;
+                renderer.compile(fx.fsScene,fx.fsCamera);
+            }
+            fx.quad.material = fx.composeMaterial;
+        }
+        if (typeof THREE.WebGLRenderTarget === 'function' && typeof renderer.setRenderTarget === 'function') {
+            target = new THREE.WebGLRenderTarget(8,8,{depthBuffer:true,stencilBuffer:false});
+            renderer.setRenderTarget(target);
+            renderer.render(scene,camera);
+        }
+        shadersPrewarmed = true;
+        const label = document.getElementById('shader-warmup-status');
+        if (label) label.textContent = 'Shaders pré-compilados ✓';
+        return true;
+    } catch (err) {
+        console.warn('Pré-compilação parcial: shaders restantes serão compilados sob demanda.',err);
+        const label = document.getElementById('shader-warmup-status');
+        if (label) label.textContent = 'Shaders carregados parcialmente';
+        return false;
+    } finally {
+        if (typeof renderer.setRenderTarget === 'function') renderer.setRenderTarget(oldTarget);
+        renderer.shadowMap.enabled = oldShadow;
+        renderer.shadowMap.needsUpdate = true;
+        if (scene.userData.sunLight) scene.userData.sunLight.castShadow = oldCastShadow;
+        if (scene.userData.localLights) scene.userData.localLights.forEach(light => {light.visible = currentGraphicsPreset().lamps;});
+        temporarilyVisible.forEach(object => {object.visible = false;});
+        previewObjects.forEach(root => {
+            scene.remove(root);
+            // Descartar só os materiais clonados e as geometrias temporárias;
+            // geometrias de protótipos são preservadas no cache.
+            if (typeof disposeVisualObject === 'function') disposeVisualObject(root);
+            if (root.isLine) {
+                root.geometry.dispose(); root.material.dispose();
+            }
+        });
+        if (target) target.dispose();
+    }
 }

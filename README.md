@@ -4,7 +4,7 @@
 [![Three.js](https://img.shields.io/badge/Three.js-r128-black?logo=three.js)](https://threejs.org/)
 [![JavaScript](https://img.shields.io/badge/JavaScript-Vanilla%20ES6+-yellow?logo=javascript)](https://developer.mozilla.org/pt-BR/docs/Web/JavaScript)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-CSS%20CDN-38bdf8?logo=tailwindcss)](https://tailwindcss.com/)
-[![Tests](https://img.shields.io/badge/Tests-25%2F25%20Passing-success?logo=node.js)](tests/multiplayer.test.mjs)
+[![Tests](https://img.shields.io/badge/Tests-37%2F37%20Passing-success?logo=node.js)](tests/multiplayer.test.mjs)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 > **Jogo de sobrevivência e ação em primeira pessoa (FPS) 3D** inspirado no modo *The Mercenaries* de **Resident Evil 5**. Desenvolvido em Three.js puro e Web Audio API procedural, sem necessidade de download de assets externos, pronto para jogar direto no navegador ou no **GitHub Pages**!
@@ -32,7 +32,36 @@ Esta versão conserva a jogabilidade original e aprimora a apresentação **dire
 - **Pós-processamento no modo ULTRA:** bloom dos pontos brilhantes, correção de cores, vinheta, granulação cinematográfica e leve aberração cromática. Feito com shaders próprios, sem dependências extras.
 - **Escalonamento de detalhes (LOD):** microdetalhes dos inimigos mais distantes são ocultados; geometria instanciada e descarte de objetos temporários ajudam a evitar perda de desempenho.
 
-**Tecla `V`:** alterna entre `ULTRA` (sombras 2048 px, pós-processamento, densidade de pixels mais alta e LOD distante) e `ALTO` (sombras 1024 px, sem bloom e resolução de pixel menor). Para máquinas com GPU integrada, experimente `ALTO`.
+**Tecla `V`:** percorre os seis perfis. Você também pode usar o menu suspenso **GFX** na interface, ver uma estimativa de FPS e manter a preferência salva no navegador. O perfil padrão é **AUTO**, que ajusta a resolução interna a cada poucos segundos durante a partida, sem modificar o multiplayer.
+
+### 🔫 Efeitos de disparo aprimorados
+
+- Clarão da arma com **núcleo brilhante, chamas, pontas cruzadas e halo**, variando de intensidade e tamanho por arma. Pistola e fuzil usam luz quente; a escopeta tem um clarão mais amplo; o tiro da sniper ganha tom elétrico azul-ciano.
+- Rastros de munição agora são **feixes 3D aditivos com halo** e desvanecimento suave, inclusive na escopeta, no bot e no multiplayer.
+- **Fumaça procedural curta** perto do cano e nos impactos de paredes, pulsos brilhantes de acerto, faíscas/partículas existentes e realce visual de headshots.
+- **Pools de objetos e geometrias compartilhadas** para evitar gerar novos buffers e shaders em cada bala. O número de rastros, fumaça e pulsos ativos é limitado. Modos Econômico/Baixo usam menos camadas.
+- A sincronização co-op continua enviando um só pacote visual por disparo, sem alterar a autoridade do host, dano ou regras de colisão.
+
+### ⚡ Otimização de renderização e pré-compilação (nova versão)
+
+| Perfil | Resolução interna máxima* | Sombras | Bloom | Detalhes e partículas |
+|---|---:|---:|---|---|
+| **AUTO** | variável, aproximadamente 70%–135% | 1024 | não | equilibrados; ajuste de resolução conforme FPS |
+| **ECONÔMICO** | 65% | desativadas | não | mínimo, luzes secundárias desligadas |
+| **BAIXO** | 80% | desativadas | não | reduzidos, luzes secundárias desligadas |
+| **MÉDIO** | 100% | 512 | não | intermediários |
+| **ALTO** | 125% | 1024 | não | detalhados |
+| **ULTRA** | 160% | 2048 | sim | detalhe e partículas máximos |
+
+* Percentuais relativos à resolução CSS e limitados pela densidade de pixels física (devicePixelRatio). O navegador pode reduzir ou limitar internamente a resolução conforme o dispositivo.
+
+- **Pré-aquecimento real de shaders:** durante a inicialização, `renderer.compile()` prepara os materiais do cenário, das cinco classes de zumbi e dos efeitos, incluindo combinações de sombras e luzes secundárias. Um pequeno render **offscreen** antecipa parte do upload de geometrias/texturas à GPU. O indicador na tela confirma a conclusão; a primeira abertura pode levar mais tempo.
+- **Modelos reutilizáveis:** inimigos do mesmo tipo usam geometrias compartilhadas via protótipos, evitando recriação e descarte de dezenas de buffers ao aparecerem. Cada inimigo mantém materiais independentes para o efeito de dano.
+- **LOD por distância:** detalhes pequenos e barras de vida são ocultados mais cedo nos perfis leves.
+- **Menor carga por efeito:** orçamento de partículas, cascas de bala, anéis de explosão, pó e vegetação ajustado por qualidade; radar atualizado cerca de 12 vezes por segundo.
+- **Memória:** materiais/geometrias transitórios são liberados ao coletar espólios, reiniciar a partida ou ao desaparecerem efeitos. Zumbis preservam apenas a geometria compartilhada em cache.
+
+**Limite técnico:** a pré-compilação reduz engasgos de criação de shaders durante a partida, mas não garante ausência absoluta de travas: drivers de vídeo, shaders de variantes novas, transferência de texturas e oscilações de CPU/GPU ainda podem causar picos. O pré-aquecimento ocorre no carregamento, não em segundo plano após iniciar a missão.
 
 > O visual é **procedural/estilizado**, não modelos escaneados com textura PBR comercial. A qualidade e o FPS dependem da GPU e do navegador. A biblioteca Three.js r128 e as fontes continuam carregadas por CDN, como na versão original.
 
@@ -57,7 +86,7 @@ Esta versão conserva a jogabilidade original e aprimora a apresentação **dire
 | **F** | Ligar / Desligar Lanterna tática |
 | **B** | Abrir Loja de Armas & Melhorias B.S.A.A. |
 | **T** | Enviar Sinal Tático (*Ping*) para o parceiro |
-| **V** | Alternar qualidade gráfica (*Ultra* / *Alto*) |
+| **V** | Alternar qualidade gráfica (*Auto*, *Econômico*, *Baixo*, *Médio*, *Alto*, *Ultra*) |
 | **M** | Ativar / Desativar áudio |
 | **Esc / P** | Pausar a missão |
 
@@ -165,6 +194,8 @@ zombie-coop-main/
 ├── tests/
 │   ├── harness.mjs          # Simulação do navegador para testes
 │   ├── gameplay.test.mjs   # Testes de jogabilidade e gráficos
+│   ├── graphics.test.mjs   # Presets, auto resolução e pré-compilação
+│   ├── shots.test.mjs      # Efeitos de tiro, reutilização e co-op
 │   └── multiplayer.test.mjs # Testes de conexão e sincronização
 └── README.md               # Documentação
 
@@ -181,7 +212,7 @@ O projeto conta com uma suíte de testes automatizados em **Node.js nativo** (`n
 node --test tests/*.test.mjs
 ```
 
-### Cenários cobertos (25/25 testes passando):
+### Cenários cobertos (37 testes automatizados):
 - Simetria de movimentação lateral (`A` e `D`)
 - Esquiva direcional (*Dash*) e invulnerabilidade (*i-frames*)
 - Cancelamento de recarga ao trocar de armas

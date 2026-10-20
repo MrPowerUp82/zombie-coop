@@ -267,6 +267,7 @@ function buildEnvironment() {
         color: 0xf59e0b, transparent: true, opacity: 0.065, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending
     });
 
+    scene.userData.localLights = [];
     lampPositions.forEach(([lx, lz]) => {
         const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.22, 6.5, 8), poleMat);
         pole.position.set(lx, 3.25, lz); pole.castShadow = true;
@@ -280,6 +281,7 @@ function buildEnvironment() {
         const pLight = new THREE.PointLight(0xf59e0b, 1.25, 28);
         pLight.position.set(lx, 6.2, lz);
         scene.add(pLight);
+        scene.userData.localLights.push(pLight);
     });
 
     buildSceneryDetails();
@@ -298,6 +300,7 @@ function buildSceneryDetails() {
         new THREE.MeshStandardMaterial({ color: 0x6e6b3b, roughness: 1, side: THREE.DoubleSide }), 200
     );
     const dummy = new THREE.Object3D();
+    scene.userData.foliage = [{mesh:stone,total:300},{mesh:grass,total:200}];
     for (const [instanced, count, range] of [[stone, 300, 1], [grass, 200, 0.7]]) {
         for (let i = 0; i < count; i++) {
             let x = 0, z = 0;
@@ -321,7 +324,7 @@ function buildSceneryDetails() {
 }
 
 function spawnExplosiveBarrels() {
-    explosiveBarrels.forEach(b => scene.remove(b.mesh));
+    explosiveBarrels.forEach(b => { scene.remove(b.mesh); disposeVisualObject(b.mesh); });
     explosiveBarrels = [];
     const barrelCoords = [[-8, -12], [12, -14], [-14, 12], [10, 14], [0, -15], [0, 15], [-20, -4], [20, 4]];
     const redMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.4, metalness: 0.3 });
@@ -434,10 +437,8 @@ function buildFirstPersonWeapons() {
         const flashHider = new THREE.Mesh(new THREE.CylinderGeometry(0.044,0.044,0.08,18),chromeMat);
         flashHider.rotation.x=Math.PI/2; flashHider.position.set(0,0.01,-len-0.23); model.add(flashHider);
     }
-    const flashGeo = new THREE.ConeGeometry(0.18, 0.42, 12);
-    const flashMat = new THREE.MeshBasicMaterial({ color: 0xfef08a, transparent: true, opacity: 0.9 });
-    muzzleFlash = new THREE.Mesh(flashGeo, flashMat);
-    muzzleFlash.rotation.x = -Math.PI / 2; muzzleFlash.position.set(0, 0.03, -0.75); muzzleFlash.visible = false;
+    muzzleFlash = createMuzzleFlashVisual();
+    muzzleFlash.position.set(0,0.03,-0.75);
     gunGroup.add(muzzleFlash);
 
     muzzleLight = new THREE.PointLight(0xf59e0b, 0, 10);
@@ -467,7 +468,7 @@ function buildFirstPersonWeapons() {
 }
 
 function ejectShellCasing(weaponId) {
-    if (gfxQuality !== 'ULTRA') return;
+    if (!currentGraphicsPreset().casings) return;
     const isShotgun = weaponId === 'SHOTGUN', isSniper = weaponId === 'RAILGUN';
     const geo = new THREE.CylinderGeometry(0.014, 0.014, isShotgun ? 0.065 : 0.045, 6);
     const mat = new THREE.MeshStandardMaterial({
@@ -498,6 +499,7 @@ function spawnGroundDecal(x, z, colorHex = 0x451a03, radius = 0.85) {
 }
 
 function spawnShockwaveRing(x, z, colorHex = 0xf97316, maxRadius = 8.5) {
+    if (!currentGraphicsPreset().rings) return;
     const geo = new THREE.RingGeometry(0.4, 0.85, 20);
     const mat = new THREE.MeshBasicMaterial({
         color: colorHex, side: THREE.DoubleSide, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending
@@ -551,8 +553,9 @@ function buildCoopAllyAvatar() {
     allyGun.position.set(0.27,1.25,-0.50);group.add(allyGun);
     const gunBarrel=new THREE.Mesh(new THREE.CylinderGeometry(0.026,0.026,0.45,16),metal);
     gunBarrel.rotation.x=Math.PI/2;gunBarrel.position.set(0.27,1.26,-0.98);group.add(gunBarrel);
-    const allyMuzzle = new THREE.Mesh(new THREE.ConeGeometry(0.14,0.4,12), new THREE.MeshBasicMaterial({color:0xffc15c,transparent:true,opacity:0.9}));
-    allyMuzzle.rotation.x=-Math.PI/2;allyMuzzle.position.set(0.27,1.26,-1.24);allyMuzzle.visible=false;group.add(allyMuzzle);
+    const allyMuzzle = createMuzzleFlashVisual();
+    allyMuzzle.position.set(0.27,1.26,-1.24);
+    group.add(allyMuzzle);
     const allyBeacon=new THREE.PointLight(0x9dd9ee,0.5,7);allyBeacon.position.set(0,2.2,0);group.add(allyBeacon);
     group.userData.rig={legs,arms,torso,head,lastX:0,lastZ:0,phase:0};
     group.visible=false;scene.add(group);
@@ -576,7 +579,33 @@ function animateCoopAlly(dt, elapsedTime) {
     rig.head.rotation.y=Math.sin(elapsedTime*0.8)*0.07;
 }
 
+// Protótipos: toda geometria do mesmo tipo é compartilhada na GPU.
+// Materiais são clonados por inimigo para que os flashes de dano continuem independentes.
+const zombiePrototypes = new Map();
+const sharedZombieGeometries = new WeakSet();
 function createZombieMesh(typeConfig, isAcid = false) {
+    const key = `${typeConfig.name || typeConfig.scale}:${isAcid}`;
+    const proto = zombiePrototypes.get(key);
+    if (proto && typeof proto.group.clone === 'function') {
+        const group = proto.group.clone(true);
+        const parts = {}, nodeMap = new Map(), uniqueMaterials = new Map();
+        const originals = [], copies = [];
+        proto.group.traverse(node => originals.push(node));
+        group.traverse(node => copies.push(node));
+        originals.forEach((node, i) => {
+            const copy = copies[i];
+            nodeMap.set(node, copy);
+            if (!copy || !copy.isMesh) return;
+            const separateMaterial = mat => {
+                if (!uniqueMaterials.has(mat)) uniqueMaterials.set(mat, typeof mat.clone === 'function' ? mat.clone() : mat);
+                return uniqueMaterials.get(mat);
+            };
+            copy.material = Array.isArray(node.material) ? node.material.map(separateMaterial) : separateMaterial(node.material);
+        });
+        Object.keys(proto.parts).forEach(name => { parts[name] = nodeMap.get(proto.parts[name]); });
+        const details = proto.detailMeshes.map(node => nodeMap.get(node)).filter(Boolean);
+        return {group,parts,materials:proto.materials.map(mat => uniqueMaterials.get(mat)),detailMeshes:details};
+    }
     const group = new THREE.Group();
     const s = typeConfig.scale;
     const skinMat = new THREE.MeshStandardMaterial({
@@ -669,7 +698,15 @@ function createZombieMesh(typeConfig, isAcid = false) {
     const staggerRing=new THREE.Mesh(new THREE.RingGeometry(0.35*s,0.48*s,32),new THREE.MeshBasicMaterial({color:0xfacc15,side:THREE.DoubleSide,transparent:true,opacity:0.9,depthWrite:false}));
     staggerRing.rotation.x=-Math.PI/2;staggerRing.position.set(0,2.12*s,0);
     staggerRing.visible=false;staggerRing.userData={isUI:true};group.add(staggerRing);
-    return {group,parts:{torso,head,leftLeg,rightLeg,leftArm,rightArm,hpBg,hpFill,staggerRing},materials:[skinMat,clothesMat],detailMeshes};
+    const built = {group,parts:{torso,head,leftLeg,rightLeg,leftArm,rightArm,hpBg,hpFill,staggerRing},materials:[skinMat,clothesMat],detailMeshes};
+    if (!proto && typeof group.clone === 'function') {
+        zombiePrototypes.set(key, built);
+        group.traverse(node => { if (node.isMesh && node.geometry) sharedZombieGeometries.add(node.geometry); });
+        // O protótipo original nunca entra na partida e nunca deve ser descartado.
+        // Cada spawn, incluindo o primeiro, recebe seus materiais particulares.
+        return createZombieMesh(typeConfig, isAcid);
+    }
+    return built;
 }
 
 function animateZombiePose(z, t, moving) {
@@ -817,16 +854,8 @@ function deploySentryTurret() {
     return true;
 }
 
-function createBulletTracer(startPos, endPos, colorHex = 0xfde047) {
-    const points = [startPos, endPos];
-    const geo = new THREE.BufferGeometry().setFromPoints(points);
-    const mat = new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.85 });
-    const line = new THREE.Line(geo, mat);
-    scene.add(line);
-    bulletTracers.push({ line, mat, life: 0.065 });
-}
-
 function spawnImpactParticles(pos, colorHex, count = 10) {
+    count = Math.max(1, Math.round(count * currentGraphicsPreset().particles));
     const geo = new THREE.SphereGeometry(0.075, 8, 6);
     const mat = new THREE.MeshBasicMaterial({ color: colorHex, transparent: false });
     const batch={geometry:geo,material:mat,remaining:count};
@@ -859,7 +888,7 @@ function spawnLootDrop(pos, guaranteed = false, isBoss = false, forcedType = nul
 
     while (lootDrops.length >= 12) {
         const oldest = lootDrops.shift();
-        if (oldest && oldest.mesh) scene.remove(oldest.mesh);
+        if (oldest && oldest.mesh) { scene.remove(oldest.mesh); disposeVisualObject(oldest.mesh); }
     }
 
     let dropType = forcedType;
@@ -888,7 +917,8 @@ function spawnExplosionVisual(pos, radius=2.6) {
     const group=new THREE.Group();
     const colors=[0xffe9a4,0xffad37,0xf34b21,0x302820];
     const shells=[];
-    for(let i=0;i<4;i++) {
+    const layerCount = gfxQuality === 'ECONOMICO' ? 1 : gfxQuality === 'BAIXO' ? 2 : gfxQuality === 'MEDIO' ? 3 : 4;
+    for(let i=0;i<layerCount;i++) {
         const mat=new THREE.MeshBasicMaterial({color:colors[i],transparent:true,opacity:i===3?0.27:0.58,depthWrite:false,blending:i===3?undefined:THREE.AdditiveBlending});
         const mesh=new THREE.Mesh(new THREE.SphereGeometry(1,16,12),mat);
         mesh.position.set((Math.random()-0.5)*0.4,(i-1)*0.2,(Math.random()-0.5)*0.4);
@@ -925,6 +955,6 @@ function disposeVisualObject(root) {
         if(Array.isArray(obj.material)) obj.material.forEach(m=>materials.add(m));
         else if(obj.material) materials.add(obj.material);
     });
-    geometries.forEach(g=>{if(g.dispose)g.dispose();});
+    geometries.forEach(g=>{if(g.dispose && !sharedZombieGeometries.has(g))g.dispose();});
     materials.forEach(m=>{if(m.dispose)m.dispose();});
 }

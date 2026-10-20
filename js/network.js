@@ -384,7 +384,11 @@ function handleNetMessage(msg) {
     } else if (msg.type === 'SHOOT_FX' && net.connected) {
         if (net.ally.active) {
             sound.playShoot(msg.weaponId);
-            createBulletTracer(new THREE.Vector3(msg.sx, msg.sy, msg.sz), new THREE.Vector3(msg.ex, msg.ey, msg.ez), 0xf59e0b);
+            if ([msg.sx,msg.sy,msg.sz,msg.ex,msg.ey,msg.ez].every(Number.isFinite)) {
+                createBulletTracer(new THREE.Vector3(msg.sx, msg.sy, msg.sz),
+                    new THREE.Vector3(msg.ex, msg.ey, msg.ez), shotStyle(msg.weaponId).color, msg.weaponId);
+                activateAllyMuzzle(msg.weaponId);
+            }
         }
     } else if (msg.type === 'WORLD_SNAPSHOT' && net.mode === 'CLIENT' && net.connected && Array.isArray(msg.zombies)) {
         if (state.wave !== msg.wave) {
@@ -520,11 +524,8 @@ function updateCoopBotAI(dt) {
             sound.playShoot('RIFLE');
             const startVec = new THREE.Vector3(net.ally.x, 1.38, net.ally.z);
             const hitVec = nearestZ.mesh.position.clone().add(new THREE.Vector3(0, 1.35, 0));
-            createBulletTracer(startVec, hitVec, 0xf59e0b);
-            if (net.ally.muzzleFlash) {
-                net.ally.muzzleFlash.visible = true;
-                setTimeout(() => { if (net.ally.muzzleFlash) net.ally.muzzleFlash.visible = false; }, 50);
-            }
+            createBulletTracer(startVec, hitVec, shotStyle('RIFLE').color, 'RIFLE');
+            activateAllyMuzzle('RIFLE');
             damageZombie(nearestZ, 22, hitVec, false, true);
         }
     } else if (net.ally.hp < net.ally.maxHp) {

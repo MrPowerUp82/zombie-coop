@@ -3,7 +3,7 @@ import vm from 'node:vm';
 import path from 'node:path';
 
 export function createGameHarness() {
-    const jsFiles = ['config.js', 'audio.js', 'network.js', 'entities.js', 'main.js'];
+    const jsFiles = ['config.js', 'audio.js', 'network.js', 'entities.js', 'shots.js', 'visuals.js', 'main.js'];
     const jsCode = jsFiles.map(file => fs.readFileSync(path.resolve(process.cwd(), 'js', file), 'utf8')).join('\n;\n');
 
     const elements = new Map();
@@ -82,7 +82,7 @@ export function createGameHarness() {
             this.position = new Vector3();
             this.rotation = { x: 0, y: 0, z: 0, order: 'YXZ', set: function(x, y, z) { this.x = x; this.y = y; this.z = z; } };
             this.scale = new Vector3(1, 1, 1);
-            this.quaternion = {};
+            this.quaternion = { setFromUnitVectors: () => this.quaternion };
             this.matrixWorld = {};
             this.children = [];
             this.userData = {};
@@ -242,6 +242,17 @@ export function createGameHarness() {
     globalThis.__game = {
         WEAPONS, CONFIG, state, net, keys, mouse, mobileInput, dom,
         get scene() { return scene; },
+        get renderer() { return renderer; },
+        get gfxQuality() { return gfxQuality; },
+        get shotFX() { return shotFX; },
+        get bulletTracers() { return bulletTracers; },
+        get muzzleFlash() { return muzzleFlash; },
+        get muzzleLight() { return muzzleLight; },
+        createBulletTracer, emitShotImpact, emitShotSmoke, updateShotEffects, clearShotEffects, activateLocalMuzzle,
+        get graphicsAutoRatio() { return graphicsAutoRatio; },
+        get shadersPrewarmed() { return shadersPrewarmed; },
+        currentGraphicsPreset, applyGraphicsQuality, toggleGraphicsQuality,
+        updateGraphicsPerformance, prewarmGameShaders,
         get camera() { return camera; },
         get obstacles() { return obstacles; },
         get zombies() { return zombies; },
